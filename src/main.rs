@@ -153,15 +153,25 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
         let max_openness = target_openness + (target_size - size) / 2;
         for openness in 0..=max_openness {
             let index_term_count = if size == openness + 1 {1} else {0};
-            let mut lambda_term_count = 0;
-            for o in 0..=openness+1 {
-                lambda_term_count += table[size-2][o];
-            }
+            let lambda_term_count = if openness == 0 {
+                table[size-2][0] + table[size-2][1]
+            } else {
+                table[size-2][openness+1]
+            };
             table[size-2][openness+1];
             let mut app_term_count = 0;
             for z in 0..=(size-2) {
+                let mut left = 0;
+                let mut right = 0;
+                for sub_openness in 0..openness {
+                    left += table[z][sub_openness];
+                    right += table[size-2-z][sub_openness];
+                }
+                app_term_count += left * table[size-2-z][openness];
+                app_term_count += table[z][openness] * right;
                 app_term_count += table[z][openness] * table[size-2-z][openness];
             }
+            dbg!(size, openness, index_term_count, lambda_term_count, app_term_count);
             table[size][openness] = index_term_count + lambda_term_count + app_term_count;
         }
     }
@@ -285,10 +295,11 @@ mod test {
 
     #[test]
     fn term_counting_works() {
-        let correct_ans = vec![0, 0, 0, 0, 1, 
-                                         0, 1, 1, 3];
+        let correct_ans = vec![0, 0, 0, 0, 1, //0 to 4
+                                         0, 1, 1, 2, 1, //5 to 9
+                                         6, 5, 13]; //10 to 12
         let mut calculated_ans = vec![];
-        for size in 0..=8 {
+        for size in 0..correct_ans.len() {
             dbg!(size);
             calculated_ans.push(dp_counting_terms_of_size_open(size, 0));
         }
