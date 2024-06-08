@@ -152,7 +152,7 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
     for size in 2..=target_size {
         let max_openness = target_openness + (target_size - size) / 2;
         for openness in 0..=max_openness {
-            let index_term_count = if size == openness + 1 {1} else {0};
+            let index_term_count = if size > openness {1} else {0};
             let mut lambda_term_count = 0; 
             for o in 0..=openness+1 {
                 lambda_term_count += table[size-2][o];
