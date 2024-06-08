@@ -171,11 +171,11 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
                 app_term_count += table[z][openness] * right;
                 app_term_count += table[z][openness] * table[size-2-z][openness];
             }
-            dbg!(size, openness, index_term_count, lambda_term_count, app_term_count);
+            // dbg!(size, openness, index_term_count, lambda_term_count, app_term_count);
             table[size][openness] = index_term_count + lambda_term_count + app_term_count;
         }
     }
-    dbg!(&table);
+    // dbg!(&table);
     table[target_size][target_openness]
 }
 
@@ -297,10 +297,20 @@ mod test {
     fn term_counting_works() {
         let correct_ans = vec![0, 0, 0, 0, 1, //0 to 4
                                          0, 1, 1, 2, 1, //5 to 9
-                                         6, 5, 13]; //10 to 12
+                                         6, 5, 13, 14, 37, //10 to 12 by hand, rest by calculation
+                                         44, 101, 134, 298, 431, //15 to 19
+                                         883, 1361, 2736, 4405, 8574, //20 to 24
+                                         14334, 27465, 47146, 89270, 156360, //25 to 29
+                                         293_840, 522_913, 978_447, 1_761_907, 3_288_605, //30 to 34
+                                         5_977_863, 11_148_652, 20_414_058, 38_071_898, 70_125_402, //35 to 39
+                                         130_880_047, 242_222_714, 452_574_468, 840_914_719, 1_573_331_752, //40 to 44
+                                         2_933_097_201, 5_495_929_096, 10_275_069_737, 19_282_848_050, 36_140_122_614, //45 to 49
+                                         67_928_087_938, 127_589_648_624, 240_179_940_582, 452_010_210_830, 852_138_794_150, //50 to 54
+                                         1_606_513_707_059, 3_032_924_598_421, 5_727_034_034_907, 10_826_642_256_913, 20_473_798_909_321, //55 to 59
+                                         38_754_322_685_329, 73_385_837_088_228, 139_079_361_409_127, 263_693_749_320_202, 500_323_417_424_622, //60 to 64
+                                        ];
         let mut calculated_ans = vec![];
         for size in 0..correct_ans.len() {
-            dbg!(size);
             calculated_ans.push(dp_counting_terms_of_size_open(size, 0));
         }
         assert_eq!(correct_ans, calculated_ans);
