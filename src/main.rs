@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use itertools::Itertools;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 enum Term{
     Lambda(Box<Term>),
@@ -190,7 +192,6 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
             } else {
                 table[size-2][openness+1]
             };
-            table[size-2][openness+1];
             let mut app_term_count = 0;
             for z in 0..=(size-2) {
                 let mut left = 0;
@@ -209,6 +210,94 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
     }
     // dbg!(&table);
     table[target_size][target_openness]
+}
+
+/* 
+    dp relation: count(0, *) = 0, count (1, *) = 0
+    count(s, o) = 
+          1 if s == o+1 else 0 
+        + count(x-2, y+1) if o > 0 else (count(s-2, 0) + count(s-2, 1))
+        + sum (z from 0 to x-2) {
+            let left  = sum (p from 0 to o-1) count(z, p)
+            let right = sum (p from 0 to o-1) count(x-2-z, p)
+            count(z, o) * right + left * count(x-2-z, o) + count(z, o) * count(x-2-z, 0)
+          }
+
+The DP relation from the previous function applies almost verbatim here. Just, 
+instead of adding to the count, we add terms to the vec. Then we return the table 
+directly. 
+
+Return type: Vec<Vec<Vec<Term>>>
+The three indices are size, openness, and then a Vec<Term> listing all terms of that (s, o) pair. 
+*/
+fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec<Vec<Vec<Term>>> {
+    let mut table: Vec<Vec<Vec<Term>>> = vec![];
+    for size in 0..=target_size {
+        table.push(vec![]);
+        let max_openness = target_openness + (target_size - size) / 2;
+        for _ in 0..=max_openness {
+            table[size].push(vec![]);
+        }
+    }
+    // we don't need the size 0, 1 basecase, because the vectors start empty,
+    // which is the basecase in question
+
+    for size in 2..=target_size {
+        let max_openness = target_openness + (target_size - size) / 2;
+        for openness in 0..=max_openness {
+            let mut new_term_list = vec![];
+            // index term case
+            if size == openness + 1 
+                {new_term_list.push(Index(openness.try_into().unwrap()))}
+            
+            // lambda term case
+            if openness == 0 {
+                for smaller_term in &table[size-2][0] {
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                }
+                for smaller_term in &table[size-2][1] {
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                }
+            } else {
+                for smaller_term in &table[size-2][openness+1] {
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                }
+            }
+
+            // app term case
+            for z in 0..=(size-2) {
+                let mut left = vec![];
+                let mut right = vec![];
+                for sub_openness in 0..openness {
+                    for left_term in &table[z][sub_openness] {
+                        left.push(left_term)
+                    }
+                    for right_term in &table[size-2-z][sub_openness] {
+                        right.push(right_term)
+                    }
+                }
+                // left * table[size-2-z][openness];
+                for (x, y) in left.into_iter().cartesian_product(&table[size-2-z][openness]) {
+                    new_term_list.push(App(
+                        Box::new(x.clone()), Box::new(y.clone())))
+                }
+                // table[z][openness] * right;
+                for (x, y) in right.into_iter().cartesian_product(&table[z][openness]) {
+                    new_term_list.push(App(
+                        Box::new(x.clone()), Box::new(y.clone())))
+                }
+                // table[z][openness] * table[size-2-z][openness];
+                for (x, y) in (&table[z][openness]).into_iter().cartesian_product(&table[size-2-z][openness]) {
+                    new_term_list.push(App(
+                        Box::new(x.clone()), Box::new(y.clone())))
+                }
+            }
+         // dbg!(size, openness, index_term_count, lambda_term_count, app_term_count);
+         table[size][openness] = new_term_list;
+        }
+    }
+    // dbg!(&table);
+    table
 }
 
 fn print_term(term: &Term) -> String {
@@ -435,13 +524,22 @@ mod test {
         // assert_eq!(nf_reduce(t_str(&"λλλ(λ(λλ3)(1)2)(1)λ4")).0, 
         //                      t_str(&"λλλ(λλ(3)λ6)((1)λ4)1"));
     }
+
+    #[test]
+    fn test_enumerate_terms_of_size() {
+        let table_to_16 = dp_list_terms_of_size_open(24, 0);
+        for size in 0..=24 {
+            let table_size = table_to_16[size][0].len();
+            let ans = dp_counting_terms_of_size_open(size, 0);
+            assert_eq!(table_size, ans.try_into().unwrap(), "size {}", size);
+        }
+    }
     /*
     functions to write:
         print term in a human readable way instead of de bruijn
-        enumerate terms of a size
+        reduce terms, separate into holdouts and non-holdouts, etc. 
     tests still to write:
-        substitute
-        whnf reduction
-        nf reduction
+        substitute?
+        whnf reduction?
      */
 }
