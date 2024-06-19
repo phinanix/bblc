@@ -36,24 +36,53 @@ fn is_closed(term: &Term) -> bool {
     term_openness(term) == 0
 }
 
+fn re_de_bruijn_substituent_recur(body_level: u8, substituent: &Term, substituent_level: u8) -> Term {
+    assert!(body_level > 0);
+    if body_level == 1 { 
+        return substituent.clone() 
+    };
+    match substituent {
+        Index(n) => 
+            if *n > substituent_level {Index(n + body_level - 1)} else {Index(*n)},
+        Lambda(x) => 
+            Lambda(Box::new(
+                re_de_bruijn_substituent_recur(body_level, x, substituent_level+1)
+            )),
+        App(x, y) => 
+            App(Box::new(re_de_bruijn_substituent_recur(body_level, x, substituent_level)),
+                Box::new(re_de_bruijn_substituent_recur(body_level, y, substituent_level))
+            ),
+    }
+}
+
+fn re_de_bruijn_substituent(level: u8, substituent: &Term) -> Term {
+    re_de_bruijn_substituent_recur(level, substituent, 0)
+}
+
 fn substitute_level(body: Term, substituent: &Term, level: u8) -> Term {
     match body {
         Index(n) => {
             if level == n {
-                substituent.clone()
+                re_de_bruijn_substituent(level, substituent)
             } else {
-                Index(n)
+                assert!(n != 1);
+                Index(n-1)
             }
         },
-        Lambda(x) => substitute_level(*x, substituent, level+1),
+        Lambda(x) => Lambda(Box::new(substitute_level(*x, substituent, level+1))),
         App(x, y) => 
             App(Box::new(substitute_level(*x, substituent, level)), 
                 Box::new(substitute_level(*y, substituent, level)))
     }
 }
 
+
+// if you have a term like (λT) S then body is T and substituent is S 
 fn substitute(body: Term, substituent: &Term) -> Term {
-    substitute_level(body, &substituent, 1)
+    // dbg!(format!("substituting {} into {}", print_term(substituent), print_term(&body)));
+    let ans = substitute_level(body, &substituent, 1);
+    // dbg!(format!("ans: {}", print_term(&ans)));
+    ans
 }
 
 // weak head normal form, E := (\x -> term) or (x term_1 . . . term_n)
@@ -182,11 +211,11 @@ fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) ->
     table[target_size][target_openness]
 }
 
-fn print_term(term: Term) -> String {
+fn print_term(term: &Term) -> String {
     match term {
         Index(n) => n.to_string(),
-        Lambda(x) => "λ".to_owned() + &print_term(*x),
-        App(x, y) => format!("({}){}", print_term(*x), print_term(*y)),
+        Lambda(x) => "λ".to_owned() + &print_term(x),
+        App(x, y) => format!("({}){}", print_term(x), print_term(y)),
     }
 }
 
@@ -293,8 +322,8 @@ mod test {
         let id_str = "λ1";
         let one_str = "λλ(2)1";
 
-        assert_eq!(print_term(id), id_str);
-        assert_eq!(print_term(one), one_str);
+        assert_eq!(print_term(&id), id_str);
+        assert_eq!(print_term(&one), one_str);
     }
 
     #[test]
@@ -302,17 +331,17 @@ mod test {
         let id = Lambda(Box::new(Index(1)));
         let one = Lambda(Box::new(Lambda(Box::new(App(Box::new(Index(2)), Box::new(Index(1)))))));
 
-        assert_eq!(parse_term(print_term(id.clone())), Some(id));
-        assert_eq!(parse_term(print_term(one.clone())), Some(one));
+        assert_eq!(parse_term(print_term(&id)), Some(id));
+        assert_eq!(parse_term(print_term(&one)), Some(one));
 
         let two = "λλ(2)(2)1";
-        assert_eq!(print_term(parse_term(two.to_owned()).unwrap()), two);
+        assert_eq!(print_term(&parse_term(two.to_owned()).unwrap()), two);
         let three = "λλ(2)(2)(2)1";
-        assert_eq!(print_term(parse_term(three.to_owned()).unwrap()), three);
+        assert_eq!(print_term(&parse_term(three.to_owned()).unwrap()), three);
         let plus_part = "((3)2)1";
-        assert_eq!(print_term(parse_term(plus_part.to_owned()).unwrap()), plus_part);
+        assert_eq!(print_term(&parse_term(plus_part.to_owned()).unwrap()), plus_part);
         let plus = "λλλλ((4)2)((3)2)1";
-        assert_eq!(print_term(parse_term(plus.to_owned()).unwrap()), plus);
+        assert_eq!(print_term(&parse_term(plus.to_owned()).unwrap()), plus);
     }
 
     #[test]
@@ -374,6 +403,38 @@ mod test {
 
     }
 
+
+    #[test]
+    fn test_nf_reduce() {
+        let t = t_str(&"λ(λ2)λ1");
+        let (nf_t, _) = nf_reduce(t);
+        let ans = t_str(&"λ1");
+        assert_eq!(nf_t, ans);
+
+        assert_eq!(nf_reduce(t_str(&"λ(λ(2)1)1")).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(t_str(&"λ(λ(1)2)1")).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(t_str(&"λλ(λ1)λ3")).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(t_str(&"λλ(λ3)λ1")).0, t_str(&"λλ2"));
+
+        assert_eq!(nf_reduce(t_str(&"λ(λλ2)1")).0, t_str(&"λλ2"));
+        assert_eq!(nf_reduce(t_str(&"λλ(λλ2)2")).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(t_str(&"λ(λλ2)λ2")).0, t_str(&"λλλ3"));
+
+        let x = t_str(&"λλλ(λ(λλ3)(1)2)(1)λ4");
+        let x_red_1 = nf_reduce_step(x.clone()).unwrap();
+        let x_red_1_str = print_term(&x_red_1);
+        let (x_red, _steps) = nf_reduce(x);
+        // dbg!(steps);
+        let x_red_str = print_term(&x_red);
+        let y = t_str(&"λλλ(λλ(3)λ6)((1)λ4)1");
+        let y_str = print_term(&y);
+        let z = t_str(&"λλλλ(2)λ5");
+        let z_str = print_term(&z);
+        assert_eq!(x_red_1_str, y_str);
+        assert_eq!(x_red_str, z_str);
+        // assert_eq!(nf_reduce(t_str(&"λλλ(λ(λλ3)(1)2)(1)λ4")).0, 
+        //                      t_str(&"λλλ(λλ(3)λ6)((1)λ4)1"));
+    }
     /*
     functions to write:
         print term in a human readable way instead of de bruijn
