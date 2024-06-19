@@ -262,6 +262,19 @@ fn main() {
 mod test {
     use super::*;
     
+    fn t_str(s: &str) -> Term {
+        parse_term(s.to_owned()).unwrap()
+    }
+
+    fn id() -> Term {
+        Lambda(Box::new(Index(1)))
+    }
+
+    fn one() -> Term {
+        Lambda(Box::new(Lambda(Box::new(
+            App(Box::new(Index(2)), Box::new(Index(1)))))))
+    }
+
     #[test]
     fn terms_print() {
         let id = Lambda(Box::new(Index(1)));
@@ -294,6 +307,41 @@ mod test {
     }
 
     #[test]
+    fn term_size_test() {
+        let id = Lambda(Box::new(Index(1)));
+        // one = λλA21
+        let one = Lambda(Box::new(Lambda(Box::new(App(Box::new(Index(2)), Box::new(Index(1)))))));
+        assert_eq!(term_size(id), 4);
+        assert_eq!(term_size(one), 11);
+        // 4 lambdas -> 8, then A A42 AA321 which is 4 As -> 8
+        // 42 -> 4 + 4 = 8, 321 -> 6 + 3 = 9
+        // 8 + 8 + 8 + 9 = 33
+        let plus_str = "λλλλ((4)2)((3)2)1";
+        let plus = parse_term(plus_str.to_owned()).unwrap();
+        assert_eq!(term_size(plus), 33);
+    }
+
+    #[test]
+    fn term_openness_test() {
+        assert_eq!(term_openness(&id()), 0);
+        assert_eq!(term_openness(&one()), 0);
+        assert_eq!(term_openness(&t_str("λ3")), 2);
+        assert_eq!(term_openness(&t_str("λ4")), 3);
+        assert_eq!(term_openness(&t_str("(1)(λλ3)λ1")), 1);
+        assert_eq!(term_openness(&t_str("((((4)5)6)7)8")), 8);
+    }
+    
+    #[test]
+    fn term_closed_test() {
+        assert_eq!(is_closed(&id()), true);
+        assert_eq!(is_closed(&one()), true);
+        assert_eq!(is_closed(&t_str("λ3")), false);
+        assert_eq!(is_closed(&t_str("λ4")), false);
+        assert_eq!(is_closed(&t_str("(1)(λλ3)λ1")), false);
+        assert_eq!(is_closed(&t_str("((((4)5)6)7)8")), false);
+    }
+
+    #[test]
     fn term_counting_works() {
         let correct_ans = vec![0, 0, 0, 0, 1, //0 to 4
                                          0, 1, 1, 2, 1, //5 to 9
@@ -322,9 +370,6 @@ mod test {
         print term in a human readable way instead of de bruijn
         enumerate terms of a size
     tests still to write:
-        term size
-        term openness 
-        is closed 
         substitute
         whnf reduction
         nf reduction
