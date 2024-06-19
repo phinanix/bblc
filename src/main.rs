@@ -6,7 +6,6 @@ enum Term{
     App(Box<Term>, Box<Term>),
     Index(u8)
 }
-use std::fmt::format;
 
 use Term::*;
 
@@ -128,10 +127,14 @@ fn nf_reduce(mut term: Term) -> (Term, u32) {
 
 /* 
     dp relation: count(0, *) = 0, count (1, *) = 0
-    count(x, y) = 
-          if x > y then 1 else 0 
-        + count(x-2, y+1)
-        + sum (z from 0 to x-2) count(z, y) * count(x-2-z, y)
+    count(s, o) = 
+          1 if s == o+1 else 0 
+        + count(x-2, y+1) if o > 0 else (count(s-2, 0) + count(s-2, 1))
+        + sum (z from 0 to x-2) {
+            let left  = sum (p from 0 to o-1) count(z, p)
+            let right = sum (p from 0 to o-1) count(x-2-z, p)
+            count(z, o) * right + left * count(x-2-z, o) + count(z, o) * count(x-2-z, 0)
+          }
 */
 fn dp_counting_terms_of_size_open(target_size: usize, target_openness: usize) -> u64 {
     //size is the first index, openness is the second
@@ -270,15 +273,21 @@ mod test {
         Lambda(Box::new(Index(1)))
     }
 
+    fn zero() -> Term {
+        Lambda(Box::new(Lambda(Box::new(
+            Index(1)
+        ))))
+    }
+
     fn one() -> Term {
         Lambda(Box::new(Lambda(Box::new(
-            App(Box::new(Index(2)), Box::new(Index(1)))))))
+            App(Box::new(Index(2)), Box::new(Index(1)))
+        ))))
     }
 
     #[test]
     fn terms_print() {
         let id = Lambda(Box::new(Index(1)));
-        let zero = id.clone();
         let one = Lambda(Box::new(Lambda(Box::new(App(Box::new(Index(2)), Box::new(Index(1)))))));
         
         let id_str = "λ1";
