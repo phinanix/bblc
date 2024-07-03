@@ -312,32 +312,81 @@ fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec
     table
 }
 
-/*
-attempt to reduce all terms to normal form. 
-return value: the original term, plus the output. 
-the output is Err if no normal form was found, and gives the term reduced for the max steps
-the output is Ok if a normal form was found, then is given
+
+type Foo = (Term, Term);
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+struct UnsolvedData {reduce_nf: Option<(Term, u32)>}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+enum TermRes {
+    Unsolved(UnsolvedData),
+    /*
     the normal form
     the number of steps to get there
     the size of the normal form
+    */
+    Reduced(Term, u32, u32),
+    // the number of steps to nf-red the term for to see that it loops
+    Looped(u32),
+}
+use TermRes::*;
+
+/*
+attempt to reduce all terms to normal form. 
+return value: the original term, plus the output TermRes. 
+the output is Unsolved if no normal form was found, and gives the term reduced for the max steps in the option
+the output is Reduced if a normal form was found
 */
 fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32) 
-    -> Vec<(Term, Result<(Term, u32, u32), Term>)> 
+    -> Vec<(Term, TermRes)>
 {
     let mut out = vec![];
     for term in terms {
         let (red_term, steps) = nf_reduce(&term, reduce_limit);
         if steps == reduce_limit {
             // we failed
-            out.push((term, Err(red_term)));
+            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((red_term, reduce_limit)) })));
         } else {
             // normal form found
             let term_size = term_size(&red_term);
-            out.push((term, Ok((red_term, steps, term_size))));
+            out.push((term, Reduced(red_term, steps, term_size)));
         }
     }
     out
 }
+
+fn check_loop(term: Term, ud: UnsolvedData, loop_limit: u32) -> (Term, TermRes) {
+    let orig_term = term.clone();
+    let mut red_term = match nf_reduce_step(term) {
+        None => panic!("loop limit should be smaller than reduce limit"),
+        Some(red_term) => red_term,
+    };
+    // step count is now 1 
+    for step_count in 1..loop_limit {
+        if red_term == orig_term {
+            return (orig_term, Looped(step_count))
+        } else {
+            red_term = match nf_reduce_step(red_term) {
+                None => panic!("loop limit should be smaller than reduce limit"),
+                Some(red_term) => red_term,
+            };
+        }
+    }
+    (orig_term, Unsolved(ud))
+}
+
+fn check_loops(terms: Vec<(Term, TermRes)>, loop_limit: u32) -> Vec<(Term, TermRes)> {
+    let mut out = vec![];
+    for (term, prev_res) in terms {
+        match prev_res {
+            Reduced(_, _, _) => out.push((term, prev_res)),
+            Unsolved(ud) => out.push(check_loop(term, ud, loop_limit)),
+            Looped(_) => panic!("shouldn't loop yet lol")
+        }
+    }
+    out
+} 
 
 fn print_term(term: &Term) -> String {
     match term {
@@ -354,24 +403,33 @@ fn display_solved_term(t: &Term, r: &Term, steps: u32, size: u32) {
 fn display_unsolved_term(t: &Term, r: &Term, step_limit: u32) {
     println!("{} reduced to {} (not in normal form) in {} steps", print_term(t), print_term(r), step_limit)
 }
-fn display_output(red_output: Vec<(Term, Result<(Term, u32, u32), Term>)> , step_limit: u32) {
+fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     let total_len = red_output.len();
     
     // split into solved and holdouts 
-    let mut solved = vec![];
+    let mut nf_terms = vec![];
+    let mut loop_terms = vec![];
     let mut unsolved = vec![];
     for output in red_output {
         match output {
-            (t, Err(r)) => unsolved.push((t, r)),
-            (t, Ok((r, steps, size))) => solved.push((t, r, steps, size)),
+            (t, Unsolved(UnsolvedData{reduce_nf: Some((r, _))})) => unsolved.push((t, r)),
+            (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
+            (t, Looped(loop_len)) => loop_terms.push((t, loop_len)),
+            _ => panic!("failed to match")
         }
     }
 
+    let num_solved = nf_terms.len() + loop_terms.len();
+
     println!("There were {} terms, of which {} were solved and {} were unsolved", 
-        total_len, solved.len(), unsolved.len());
-    if solved.len() > 0 {
+        total_len, num_solved, unsolved.len());
+    if loop_terms.len() > 0 {
+        println!("{} terms were solved by looping", loop_terms.len());
+    }
+
+    if nf_terms.len() > 0 {
     // show maximum reduction steps
-    let mut sorted_by_steps = solved.clone();
+    let mut sorted_by_steps = nf_terms.clone();
     sorted_by_steps.sort_by_key(|(_t, _r, steps, _size)|*steps);
     sorted_by_steps.reverse();
     println!("maximum reduction steps: {}", sorted_by_steps[0].2);
@@ -381,7 +439,7 @@ fn display_output(red_output: Vec<(Term, Result<(Term, u32, u32), Term>)> , step
     }
 
     // show maximum output size
-    let mut sorted_by_size = solved.clone();
+    let mut sorted_by_size = nf_terms.clone();
     sorted_by_size.sort_by_key(|(_t, _r, _steps, size)|*size);
     sorted_by_size.reverse();
     println!("maximum output size: {}", sorted_by_size[0].3);
@@ -468,13 +526,15 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    let max_size = 32;
+    // next todo item: solve terms that loop, but start looping later than step 1
+    let max_size = 22;
     let step_limit = 100;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\nsize: {}", size);
         let input = table[size][0].clone();
-        let output = reduce_list_of_terms(input, step_limit);
+        let red_terms = reduce_list_of_terms(input, step_limit);
+        let output = check_loops(red_terms, 10);
         display_output(output, step_limit);
     }
 }
