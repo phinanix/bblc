@@ -11,10 +11,10 @@ enum Term{
 
 use Term::*;
 
-fn term_size(term: Term) -> u32 {
+fn term_size(term: &Term) -> u32 {
     match term {
-        Term::Lambda(x) => 2 + term_size(*x),
-        Term::App(x, y) => 2 + term_size(*x) + term_size(*y),
+        Term::Lambda(x) => 2 + term_size(x),
+        Term::App(x, y) => 2 + term_size(x) + term_size(y),
         Term::Index(n) => (n + 1).into(),
     }
 }
@@ -64,11 +64,16 @@ fn re_de_bruijn_substituent(level: u8, substituent: &Term) -> Term {
 fn substitute_level(body: Term, substituent: &Term, level: u8) -> Term {
     match body {
         Index(n) => {
-            if level == n {
+            if n == level {
                 re_de_bruijn_substituent(level, substituent)
-            } else {
-                assert!(n != 1);
+            } else if n > level {
+                // in something like λ6, we need to take into account that there is 
+                // one fewer lambda between the variable and its target now
+                assert!(n != 1, "body {} substi {} level {}", print_term(&body), print_term(&substituent), level);
                 Index(n-1)
+            } else {
+                // whereas in something like λλλ1, we don't need to change the 1
+                Index(n) 
             }
         },
         Lambda(x) => Lambda(Box::new(substitute_level(*x, substituent, level+1))),
@@ -109,11 +114,14 @@ fn whnf_reduce_step(term: Term) -> Option<Term> {
     }
 }
 
-fn whnf_reduce(mut term: Term) -> (Term, u32) {
+fn whnf_reduce(mut term: Term, reduce_limit: u32) -> (Term, u32) {
     let mut counter = 0; 
     while let Some(reduced_term) = whnf_reduce_step(term.clone()) {
         term = reduced_term;
         counter += 1;
+        if counter == reduce_limit {
+            break
+        }
     }
     (term, counter)
 }
@@ -146,13 +154,17 @@ fn nf_reduce_step(term: Term) -> Option<Term> {
     }
 }
 
-fn nf_reduce(mut term: Term) -> (Term, u32) {
+fn nf_reduce(term: &Term, reduce_limit: u32) -> (Term, u32) {
     let mut counter = 0;
-    while let Some(reduced_term) = nf_reduce_step(term.clone()) {
-        term = reduced_term;
+    let mut cur_term = term.clone();
+    while let Some(reduced_term) = nf_reduce_step(cur_term.clone()) {
+        cur_term = reduced_term;
         counter += 1;
+        if counter == reduce_limit {
+            break
+        }
     }
-    (term, counter)
+    (cur_term, counter)
 }
 
 
@@ -300,11 +312,90 @@ fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec
     table
 }
 
+/*
+attempt to reduce all terms to normal form. 
+return value: the original term, plus the output. 
+the output is Err if no normal form was found, and gives the term reduced for the max steps
+the output is Ok if a normal form was found, then is given
+    the normal form
+    the number of steps to get there
+    the size of the normal form
+*/
+fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32) 
+    -> Vec<(Term, Result<(Term, u32, u32), Term>)> 
+{
+    let mut out = vec![];
+    for term in terms {
+        let (red_term, steps) = nf_reduce(&term, reduce_limit);
+        if steps == reduce_limit {
+            // we failed
+            out.push((term, Err(red_term)));
+        } else {
+            // normal form found
+            let term_size = term_size(&red_term);
+            out.push((term, Ok((red_term, steps, term_size))));
+        }
+    }
+    out
+}
+
 fn print_term(term: &Term) -> String {
     match term {
         Index(n) => n.to_string(),
         Lambda(x) => "λ".to_owned() + &print_term(x),
         App(x, y) => format!("({}){}", print_term(x), print_term(y)),
+    }
+}
+
+fn display_solved_term(t: &Term, r: &Term, steps: u32, size: u32) {
+    println!("{} reduced to {} in {} steps (output size: {})", print_term(t), print_term(r), steps, size)
+}
+
+fn display_unsolved_term(t: &Term, r: &Term, step_limit: u32) {
+    println!("{} reduced to {} (not in normal form) in {} steps", print_term(t), print_term(r), step_limit)
+}
+fn display_output(red_output: Vec<(Term, Result<(Term, u32, u32), Term>)> , step_limit: u32) {
+    let total_len = red_output.len();
+    
+    // split into solved and holdouts 
+    let mut solved = vec![];
+    let mut unsolved = vec![];
+    for output in red_output {
+        match output {
+            (t, Err(r)) => unsolved.push((t, r)),
+            (t, Ok((r, steps, size))) => solved.push((t, r, steps, size)),
+        }
+    }
+
+    println!("There were {} terms, of which {} were solved and {} were unsolved", 
+        total_len, solved.len(), unsolved.len());
+    if solved.len() > 0 {
+    // show maximum reduction steps
+    let mut sorted_by_steps = solved.clone();
+    sorted_by_steps.sort_by_key(|(_t, _r, steps, _size)|*steps);
+    sorted_by_steps.reverse();
+    println!("maximum reduction steps: {}", sorted_by_steps[0].2);
+    // and three such longest terms
+    for (t, r, steps, size) in &sorted_by_steps[0..3.min(sorted_by_steps.len())] {
+        display_solved_term(t, r, *steps, *size)
+    }
+
+    // show maximum output size
+    let mut sorted_by_size = solved.clone();
+    sorted_by_size.sort_by_key(|(_t, _r, _steps, size)|*size);
+    sorted_by_size.reverse();
+    println!("maximum output size: {}", sorted_by_size[0].3);
+    // and three such largest terms 
+    for (t, r, steps, size) in &sorted_by_size[0..3.min(sorted_by_size.len())] {
+        display_solved_term(t, r, *steps, *size)
+    }
+    }
+
+    // display number of holdouts
+    println!("There were {} unsolved terms", unsolved.len());
+    // display some holdouts
+    for (t, r) in &unsolved[0..10.min(unsolved.len())] {
+        display_unsolved_term(t, r, step_limit)
     }
 }
 
@@ -377,7 +468,15 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    println!("Hello, world!");
+    let max_size = 32;
+    let step_limit = 100;
+    let table = dp_list_terms_of_size_open(max_size, 0);
+    for size in 0..=max_size {
+        println!("\n\nsize: {}", size);
+        let input = table[size][0].clone();
+        let output = reduce_list_of_terms(input, step_limit);
+        display_output(output, step_limit);
+    }
 }
 
 mod test {
@@ -438,14 +537,14 @@ mod test {
         let id = Lambda(Box::new(Index(1)));
         // one = λλA21
         let one = Lambda(Box::new(Lambda(Box::new(App(Box::new(Index(2)), Box::new(Index(1)))))));
-        assert_eq!(term_size(id), 4);
-        assert_eq!(term_size(one), 11);
+        assert_eq!(term_size(&id), 4);
+        assert_eq!(term_size(&one), 11);
         // 4 lambdas -> 8, then A A42 AA321 which is 4 As -> 8
         // 42 -> 4 + 4 = 8, 321 -> 6 + 3 = 9
         // 8 + 8 + 8 + 9 = 33
         let plus_str = "λλλλ((4)2)((3)2)1";
         let plus = parse_term(plus_str.to_owned()).unwrap();
-        assert_eq!(term_size(plus), 33);
+        assert_eq!(term_size(&plus), 33);
     }
 
     #[test]
@@ -496,23 +595,23 @@ mod test {
     #[test]
     fn test_nf_reduce() {
         let t = t_str(&"λ(λ2)λ1");
-        let (nf_t, _) = nf_reduce(t);
+        let (nf_t, _) = nf_reduce(&t, 10);
         let ans = t_str(&"λ1");
         assert_eq!(nf_t, ans);
 
-        assert_eq!(nf_reduce(t_str(&"λ(λ(2)1)1")).0, t_str(&"λ(1)1"));
-        assert_eq!(nf_reduce(t_str(&"λ(λ(1)2)1")).0, t_str(&"λ(1)1"));
-        assert_eq!(nf_reduce(t_str(&"λλ(λ1)λ3")).0, t_str(&"λλλ3"));
-        assert_eq!(nf_reduce(t_str(&"λλ(λ3)λ1")).0, t_str(&"λλ2"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λ(2)1)1"), 10).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λ(1)2)1"), 10).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λ1)λ3"), 10).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λ3)λ1"), 10).0, t_str(&"λλ2"));
 
-        assert_eq!(nf_reduce(t_str(&"λ(λλ2)1")).0, t_str(&"λλ2"));
-        assert_eq!(nf_reduce(t_str(&"λλ(λλ2)2")).0, t_str(&"λλλ3"));
-        assert_eq!(nf_reduce(t_str(&"λ(λλ2)λ2")).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)1"), 10).0, t_str(&"λλ2"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λλ2)2"), 10).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)λ2"), 10).0, t_str(&"λλλ3"));
 
         let x = t_str(&"λλλ(λ(λλ3)(1)2)(1)λ4");
         let x_red_1 = nf_reduce_step(x.clone()).unwrap();
         let x_red_1_str = print_term(&x_red_1);
-        let (x_red, _steps) = nf_reduce(x);
+        let (x_red, _steps) = nf_reduce(&x, 10);
         // dbg!(steps);
         let x_red_str = print_term(&x_red);
         let y = t_str(&"λλλ(λλ(3)λ6)((1)λ4)1");
