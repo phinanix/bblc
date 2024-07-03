@@ -327,8 +327,10 @@ enum TermRes {
     the size of the normal form
     */
     Reduced(Term, u32, u32),
-    // the number of steps to nf-red the term for to see that it loops
-    Looped(u32),
+    /*
+    the start and end number of reduction steps that we reduced the term for that results in a loop
+     */
+    Looped(u32, u32),
 }
 use TermRes::*;
 
@@ -358,20 +360,28 @@ fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32)
 
 fn check_loop(term: Term, ud: UnsolvedData, loop_limit: u32) -> (Term, TermRes) {
     let orig_term = term.clone();
+    let mut compare_term = term.clone();
     let mut red_term = match nf_reduce_step(term) {
         None => panic!("loop limit should be smaller than reduce limit"),
         Some(red_term) => red_term,
     };
+    let mut prev_step_goal = 0;
+    let mut next_step_goal = 1; 
+
     // step count is now 1 
     for step_count in 1..loop_limit {
-        if red_term == orig_term {
-            return (orig_term, Looped(step_count))
-        } else {
-            red_term = match nf_reduce_step(red_term) {
-                None => panic!("loop limit should be smaller than reduce limit"),
-                Some(red_term) => red_term,
-            };
+        if red_term == compare_term {
+            return (orig_term, Looped(prev_step_goal, step_count))
         }
+        if step_count == next_step_goal {
+            compare_term = red_term.clone();
+            prev_step_goal = next_step_goal;
+            next_step_goal *= 2;
+        }
+        red_term = match nf_reduce_step(red_term) {
+            None => panic!("loop limit should be smaller than reduce limit"),
+            Some(red_term) => red_term,
+        };
     }
     (orig_term, Unsolved(ud))
 }
@@ -382,7 +392,7 @@ fn check_loops(terms: Vec<(Term, TermRes)>, loop_limit: u32) -> Vec<(Term, TermR
         match prev_res {
             Reduced(_, _, _) => out.push((term, prev_res)),
             Unsolved(ud) => out.push(check_loop(term, ud, loop_limit)),
-            Looped(_) => panic!("shouldn't loop yet lol")
+            Looped(_, _) => panic!("shouldn't loop yet lol")
         }
     }
     out
@@ -403,6 +413,11 @@ fn display_solved_term(t: &Term, r: &Term, steps: u32, size: u32) {
 fn display_unsolved_term(t: &Term, r: &Term, step_limit: u32) {
     println!("{} reduced to {} (not in normal form) in {} steps", print_term(t), print_term(r), step_limit)
 }
+
+fn display_looped_term(t: &Term, s: u32, e: u32) {
+    println!("{} looped from {} to {}", print_term(t), s, e);
+}
+
 fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     let total_len = red_output.len();
     
@@ -414,7 +429,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
         match output {
             (t, Unsolved(UnsolvedData{reduce_nf: Some((r, _))})) => unsolved.push((t, r)),
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
-            (t, Looped(loop_len)) => loop_terms.push((t, loop_len)),
+            (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             _ => panic!("failed to match")
         }
     }
@@ -425,6 +440,13 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
         total_len, num_solved, unsolved.len());
     if loop_terms.len() > 0 {
         println!("{} terms were solved by looping", loop_terms.len());
+        let mut sorted_by_end = loop_terms.clone();
+        sorted_by_end.sort_by_key(|(_t, _s, e)| *e);
+        sorted_by_end.reverse();
+        for (t, s, e) in &sorted_by_end[0..10.min(sorted_by_end.len())] {
+            display_looped_term(t, *s, *e);
+        }
+
     }
 
     if nf_terms.len() > 0 {
@@ -527,8 +549,8 @@ fn parse_term(term_string: String) -> Option<Term> {
 
 fn main() {
     // next todo item: solve terms that loop, but start looping later than step 1
-    let max_size = 22;
-    let step_limit = 100;
+    let max_size = 25;
+    let step_limit = 40;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\nsize: {}", size);
