@@ -38,6 +38,95 @@ fn is_closed(term: &Term) -> bool {
     term_openness(term) == 0
 }
 
+/*
+    n -> 111{n times}0
+    λ -> 00
+    A -> 01
+    these last two I don't remember which is which but it doesn't matter 
+    and is easy to fix later
+ */
+fn term_to_bit_list_recur(out: &mut Vec<bool>, term: &Term) {
+    match term {
+        Index(n) => {
+            for _ in 0..*n {
+                out.push(true);
+            }
+            out.push(false);
+        },
+        Lambda(inner_term) => {
+            out.push(false);
+            out.push(false);
+            term_to_bit_list_recur(out, inner_term);
+        },
+        App(left_term, right_term) => {
+            out.push(false);
+            out.push(true);
+            term_to_bit_list_recur(out, left_term);
+            term_to_bit_list_recur(out, right_term);
+        },
+    }
+}
+
+fn term_to_bit_list(term: &Term) -> Vec<bool> {
+    let mut out = vec![];
+    term_to_bit_list_recur(&mut out, term);
+    out
+}
+
+fn bit_array_to_byte(bits: &[bool; 8]) -> u8 {
+    let mut out = 0u8;
+    for bit in bits[0..=6].iter() {
+        if *bit {
+            out += 1;
+        }
+        out *= 2;
+    }
+    if bits[7] {out += 1}
+    out
+}
+
+fn bit_list_to_byte_list(bools: Vec<bool>) -> Vec<u8> {
+    assert_eq!(bools.len() % 8, 0);
+    let num_bytes = bools.len() / 8;
+    let mut out = vec![];
+    for byte_idx in 0..num_bytes {
+        let thing = &bools[byte_idx*8.. (byte_idx+1)*8].try_into().unwrap();
+        out.push(bit_array_to_byte(thing));
+    }
+    out
+}
+
+fn vec_u8_to_u64(bytes: Vec<u8>) -> u64 {
+    assert_eq!(bytes.len(), 8);
+    let byte_slice = bytes.try_into().unwrap();
+    u64::from_be_bytes(byte_slice)    
+}
+
+/*
+ takes a term
+ if the term is sizze 63 or less, converts to a u64, otherwise returns none
+ the conversion is, the first block of zeros is padding, then there is a 1 
+ indicating the end of padding, then thhere is the bits for the term itself
+ so a term which was 63 bits would be 1{term}, while id, which is the four bits
+ 0010 is 0..{59 zeros}..010010
+ */
+fn term_to_u64(term: &Term) -> Option<u64> {
+    let term_bits = term_to_bit_list(term);
+    if term_bits.len() > 63 {
+        return None
+    }
+    let padding_zero_count = 63 - term_bits.len();
+    let mut all_bits = vec![];
+    for _ in 0..padding_zero_count {
+        all_bits.push(false);
+    }
+    // the end of the padding
+    all_bits.push(true);
+    all_bits.extend(term_bits);
+    assert_eq!(all_bits.len(), 64);
+    Some(vec_u8_to_u64(bit_list_to_byte_list(all_bits)))
+}
+
 fn re_de_bruijn_substituent_recur(body_level: u8, substituent: &Term, substituent_level: u8) -> Term {
     assert!(body_level > 0);
     if body_level == 1 { 
@@ -358,40 +447,63 @@ fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32)
     out
 }
 
-fn check_loop(term: Term, ud: UnsolvedData, loop_limit: u32) -> (Term, TermRes) {
+// loop length is the difference between slow and fast when looped
+// loop found by is the steps slow had taken by then
+fn find_min_loop(term: Term, loop_length: u32, loop_found_by: u32) -> (Term, TermRes) {
+    let orig_term = term.clone();
+    // dbg!(print_term(&orig_term), loop_length, loop_found_by);
+    let mut slow_term = term.clone();
+    let mut fast_term = term; 
+    for _ in 0..loop_length {
+        // println!("fast");
+        fast_term = nf_reduce_step(fast_term).expect("term should reduce");
+    }
+    if slow_term == fast_term {
+        return (orig_term, Looped(0, loop_length))
+    }
+    for slow_index in 1..loop_found_by {
+        // println!("slow");
+        slow_term = nf_reduce_step(slow_term).expect("slow should reduce");
+        fast_term = nf_reduce_step(fast_term).expect("fast should reduce");
+        if slow_term == fast_term {
+            return (orig_term, Looped(slow_index, slow_index + loop_length))
+        }
+    
+    }
+    panic!("loop was found but no min loop was found")
+}
+
+fn check_loop(term: Term, ud: UnsolvedData, loop_base: u32, loop_limit: u32) -> (Term, TermRes) {
     let orig_term = term.clone();
     let mut compare_term = term.clone();
-    let mut red_term = match nf_reduce_step(term) {
-        None => panic!("loop limit should be smaller than reduce limit"),
-        Some(red_term) => red_term,
-    };
+    let mut red_term = nf_reduce_step(term)
+        .expect("loop limit should be smaller than reduce limit");
     let mut prev_step_goal = 0;
-    let mut next_step_goal = 1; 
+    let mut next_step_goal = loop_base; 
 
     // step count is now 1 
     for step_count in 1..loop_limit {
         if red_term == compare_term {
-            return (orig_term, Looped(prev_step_goal, step_count))
+            return find_min_loop(orig_term, 
+                step_count-prev_step_goal, prev_step_goal);
         }
         if step_count == next_step_goal {
             compare_term = red_term.clone();
             prev_step_goal = next_step_goal;
             next_step_goal *= 2;
         }
-        red_term = match nf_reduce_step(red_term) {
-            None => panic!("loop limit should be smaller than reduce limit"),
-            Some(red_term) => red_term,
-        };
+        red_term = nf_reduce_step(red_term)
+            .expect("loop limit should be smaller than reduce limit");
     }
     (orig_term, Unsolved(ud))
 }
 
-fn check_loops(terms: Vec<(Term, TermRes)>, loop_limit: u32) -> Vec<(Term, TermRes)> {
+fn check_loops(terms: Vec<(Term, TermRes)>, loop_base: u32, loop_limit: u32) -> Vec<(Term, TermRes)> {
     let mut out = vec![];
     for (term, prev_res) in terms {
         match prev_res {
             Reduced(_, _, _) => out.push((term, prev_res)),
-            Unsolved(ud) => out.push(check_loop(term, ud, loop_limit)),
+            Unsolved(ud) => out.push(check_loop(term, ud, loop_base, loop_limit)),
             Looped(_, _) => panic!("shouldn't loop yet lol")
         }
     }
@@ -549,14 +661,14 @@ fn parse_term(term_string: String) -> Option<Term> {
 
 fn main() {
     // next todo item: solve terms that loop, but start looping later than step 1
-    let max_size = 25;
-    let step_limit = 40;
+    let max_size = 26;
+    let step_limit = 60;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\nsize: {}", size);
         let input = table[size][0].clone();
         let red_terms = reduce_list_of_terms(input, step_limit);
-        let output = check_loops(red_terms, 10);
+        let output = check_loops(red_terms, 10, 40);
         display_output(output, step_limit);
     }
 }
@@ -723,4 +835,56 @@ mod test {
         substitute?
         whnf reduction?
      */
+
+
+    #[test]
+    fn test_bits_to_bytes() {
+        let bits_zero = [false; 8];
+        let byte = bit_array_to_byte(&bits_zero);
+        assert_eq!(byte, 0);
+        
+        let bits_255 = [true; 8];
+        let byte = bit_array_to_byte(&bits_255);
+        assert_eq!(byte, 255);
+        
+        let bits_1 = [false, false, false, false,
+                               false, false, false, true];
+        let byte = bit_array_to_byte(&bits_1);
+        assert_eq!(byte, 1);
+
+        
+        let bits_128 = [true, false, false, false,
+                               false, false, false, false];
+        let byte = bit_array_to_byte(&bits_128);
+        assert_eq!(byte, 128);
+
+        let bits_85 = [false, true, false, true,
+                               false, true, false, true];
+        let byte = bit_array_to_byte(&bits_85);
+        assert_eq!(byte, 85);
+
+        let mut bits_vec = vec![];
+        bits_vec.extend(bits_85);
+        bits_vec.extend(bits_1);
+        bits_vec.extend(bits_1);
+        bits_vec.extend(bits_255);
+        bits_vec.extend(bits_128);
+        let bytes_vec = bit_list_to_byte_list(bits_vec);
+        let ans_vec = vec![85, 1, 1, 255, 128];
+        assert_eq!(bytes_vec, ans_vec);
+    }
+
+    #[test]
+    fn test_term_to_u64() {
+        let id = Lambda(Box::new(Index(1)));
+        let mb_u64 = term_to_u64(&id);
+        // id should be 2 plus 16
+        assert_eq!(mb_u64, Some(18));
+
+        let dup = &t_str("λ(1)1");
+        let mb_u64 = term_to_u64(&dup);
+        // dup is λA11 so 0001 1010 which is 2 + 8 + 16 = 26
+        // so as a u64 it'll be 26 + 256 = 282
+        assert_eq!(mb_u64, Some(282)); 
+    }
 }
