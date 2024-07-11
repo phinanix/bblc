@@ -475,7 +475,7 @@ fn find_min_loop(term: Term, loop_length: u32, loop_found_by: u32) -> (Term, Ter
         }
     
     }
-    panic!("loop was found but no min loop was found")
+    panic!("loop was found but no min loop was found: {}", print_term(&orig_term))
 }
 
 fn check_loop(term: Term, ud: UnsolvedData, loop_base: u32, loop_limit: u32) -> (Term, TermRes) {
@@ -668,9 +668,9 @@ fn parse_term(term_string: String) -> Option<Term> {
 
 fn main() {
     // next todo item: solve terms that loop, but start looping later than step 1
-    let max_size = 26;
-    let step_limit = 60;
-    let display_steps = 20;
+    let max_size = 32;
+    let step_limit = 100;
+    let display_steps = 10;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\n\nsize: {}", size);

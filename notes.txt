@@ -1,0 +1,17 @@
+
+11 July 24
+Checking only for halting and loops, unsolved terms by size
+22  3
+23  0
+24  5
+25  7
+26  22
+27  12
+28  128
+29  140
+30  337
+
+654
+31  527
+1181
+32 
