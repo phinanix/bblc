@@ -24,14 +24,30 @@ new numbers, loops only:
 28  101   148
 29  136   284
 30  303   587
-31  
-32  
+31  442   1029
+32  1228  2257
 
-term that crashes min_loop: (λ(1)1)λ((1)λ2)λ(1)2
+31 = 309 + 133 = 442
+32 = 765 + 463 = 1228
+
+loops and (weak) subsets:
+22  0     0
+23  0     0
+24  3     3
+25  5     8
+26  8     16
+27  7     23
+28  41    64
+29  70    134
+30  170   304
+31  309   613
+32  765   1378
+
+term that crashes min_loop: (λ(1)1) λ((1)λ2) λ(1)2
 term that OOMs: 
+size 30 reducing A λA11  λλA A22 A11
 size 30 reducing AλA11λλAA22A11
-size 30 reducing AλA11λλAA22A11
-another term that crashes min_loop (this time of size 31): AλA11λAA1λA1λ21
+another term that crashes min_loop (this time of size 31): A λA11 λA  A1 λA1λ2  1
 
 
 twi stuff
@@ -54,9 +70,9 @@ but I missed previously.
 
 july 11 todos
 * figure out why terms are not subseting
-* figure out why terms are not unique
+* prove a better theorem about subsets
+* implement the better subset decider
 * mb display looping or subsetting more accurately
-* figure out why min_loop crashes
 * implement different-reduction-order 
 * implement subset using just hashes and check if it is faster
 

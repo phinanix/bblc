@@ -502,15 +502,16 @@ fn find_min_loop(term: Term, loop_length: u32, loop_found_by: u32) -> (Term, Ter
     // dbg!(print_term(&orig_term), loop_length, loop_found_by);
     let mut slow_term = term.clone();
     let mut fast_term = term; 
-    for _ in 0..loop_length {
-        // println!("fast");
+    for _fast_index in 0..loop_length {
+        // println!("fast {}", fast_index);
         fast_term = nf_reduce_step(fast_term).expect("term should reduce");
     }
     if slow_term == fast_term {
         return (orig_term, Looped(0, loop_length))
     }
-    for slow_index in 1..loop_found_by {
-        // println!("slow");
+    for slow_index in 1..=loop_found_by {
+        // println!("slow {}", slow_index);
+        // println!("slow {} {}\nfast {} {}", term_size(&slow_term), print_term(&slow_term), term_size(&fast_term), print_term(&fast_term));
         slow_term = nf_reduce_step(slow_term).expect("slow should reduce");
         fast_term = nf_reduce_step(fast_term).expect("fast should reduce");
         if slow_term == fast_term {
@@ -814,6 +815,19 @@ fn print_term(term: &Term) -> String {
     }
 }
 
+fn print_term_reduction(term: &Term, reduce_steps: u32) -> String {
+    let mut out = String::new();
+    let mut cur_term = term.clone();
+    for step in 0..reduce_steps {
+        out.push_str(&format!("step {} size {} term {}\n", step, term_size(&cur_term), print_term(&cur_term)));
+        cur_term = match nf_reduce_step(cur_term) {
+            None => return out,
+            Some(t) => t,
+        }
+    }
+    out 
+}
+
 fn print_terms(terms: &[Term]) -> String {
     let mut out = String::new();
     out.push('[');
@@ -940,6 +954,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
     }
 }
 
+#[derive(Debug)]
 enum Token {
     Lambda, 
     Open, 
@@ -1009,7 +1024,7 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    let max_size = 25;
+    let max_size = 32;
     let step_limit = 100;
     let size_limit = 100_000;
     let display_steps = 10;
