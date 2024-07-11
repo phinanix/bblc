@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use itertools::Itertools;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -245,17 +245,35 @@ fn nf_reduce_step(term: Term) -> Option<Term> {
     }
 }
 
-fn nf_reduce(term: &Term, reduce_limit: u32) -> (Term, u32) {
+
+// (Term, u32, bool)
+// (the term after reduction, the number of steps the term was reduced, whether the size limit was reached)
+fn nf_reduce(term: &Term, reduce_limit: u32, size_limit: u32) -> (Term, u32, bool) {
+    // let orig_term = term.clone();
     let mut counter = 0;
+    // let mut printed = 0;
     let mut cur_term = term.clone();
     while let Some(reduced_term) = nf_reduce_step(cur_term.clone()) {
+        let cur_size = term_size(&cur_term);
+        // if cur_size > 64 { //&& printed < 5 {
+        //     if printed == 0 {
+        //         println!("size {} reducing large term {}", term_size(&orig_term), print_term(&orig_term));
+        //         }
+        //         printed += 1;
+        //         // println!("cur size {} cur term {}", cur_size, print_term(&cur_term));
+        //         println!("cur size {}", cur_size);
+        //         }
+        
+        if cur_size > size_limit {
+            return (cur_term, counter, true)
+        }
         cur_term = reduced_term;
         counter += 1;
         if counter == reduce_limit {
             break
         }
     }
-    (cur_term, counter)
+    (cur_term, counter, false)
 }
 
 
@@ -348,22 +366,27 @@ fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec
     for size in 2..=target_size {
         let max_openness = target_openness + (target_size - size) / 2;
         for openness in 0..=max_openness {
+            // println!("\n");
+            // dbg!(size, openness);
             let mut new_term_list = vec![];
             // index term case
             if size == openness + 1 
                 {new_term_list.push(Index(openness.try_into().unwrap()))}
-            
+            // println!("open {}", print_terms(&new_term_list));
             // lambda term case
             if openness == 0 {
                 for smaller_term in &table[size-2][0] {
-                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())));
+                    // println!("lambda 0 {}", print_terms(&new_term_list));
                 }
                 for smaller_term in &table[size-2][1] {
-                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())));
+                    // println!("lambda 1 {}", print_terms(&new_term_list));
                 }
             } else {
                 for smaller_term in &table[size-2][openness+1] {
-                    new_term_list.push(Lambda(Box::new(smaller_term.clone())))
+                    new_term_list.push(Lambda(Box::new(smaller_term.clone())));
+                    // println!("lambda 2 {}", print_terms(&new_term_list));
                 }
             }
 
@@ -379,23 +402,34 @@ fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec
                         right.push(right_term)
                     }
                 }
+                // println!("\n z {}", z);
+                // println!("left {}", print_term_refs(&left));
+                // println!("right {}", print_term_refs(&right));
+                // println!("t[s-2-z][o] {}", print_terms(&table[size-2-z][openness]));
+                // println!("t[z][o] {}", print_terms(&table[z][openness]));
                 // left * table[size-2-z][openness];
                 for (x, y) in left.into_iter().cartesian_product(&table[size-2-z][openness]) {
                     new_term_list.push(App(
-                        Box::new(x.clone()), Box::new(y.clone())))
+                        Box::new(x.clone()), Box::new(y.clone())));
+                    // println!("app 0 {}", print_terms(&new_term_list));
                 }
                 // table[z][openness] * right;
-                for (x, y) in right.into_iter().cartesian_product(&table[z][openness]) {
+                for (x, y) in (&table[z][openness]).into_iter().cartesian_product(&right) {
                     new_term_list.push(App(
-                        Box::new(x.clone()), Box::new(y.clone())))
+                        Box::new(x.clone()), Box::new((*y).clone())));
+                    // println!("app 1 {}", print_terms(&new_term_list));
                 }
                 // table[z][openness] * table[size-2-z][openness];
                 for (x, y) in (&table[z][openness]).into_iter().cartesian_product(&table[size-2-z][openness]) {
                     new_term_list.push(App(
-                        Box::new(x.clone()), Box::new(y.clone())))
+                        Box::new(x.clone()), Box::new(y.clone())));
+                    // println!("app 2 {}", print_terms(&new_term_list));
                 }
             }
          // dbg!(size, openness, index_term_count, lambda_term_count, app_term_count);
+         if let Some(dup) = find_duplicate(&new_term_list) {
+            panic!("found duplicate at size {} open {} which is {}", size, openness, print_term(dup));
+         }
          table[size][openness] = new_term_list;
         }
     }
@@ -440,17 +474,18 @@ return value: the original term, plus the output TermRes.
 the output is Unsolved if no normal form was found, and gives the term reduced for the max steps in the option
 the output is Reduced if a normal form was found
 */
-fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32, display_steps: u32) 
+fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32, size_limit: u32, display_steps: u32) 
     -> Vec<(Term, TermRes)>
 {
     let mut out = vec![];
     for term in terms {
-        let (red_term, steps) = nf_reduce(&term, reduce_limit);
-        if steps == reduce_limit {
+        // println!("size {} reducing {}", term_size(&term), print_term(&term));
+        let (red_term, steps, size_limit_reached) = nf_reduce(&term, reduce_limit, size_limit);
+        if steps == reduce_limit || size_limit_reached {
             // we failed
-            let (display_term, display_steps_used) = nf_reduce(&term, display_steps);
-            assert_eq!(display_steps_used, display_steps);
-            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((reduce_limit, display_term, display_steps)) })));
+            let (display_term, display_steps_used, size_limit_display_reached) = nf_reduce(&term, display_steps, size_limit);
+            assert!((display_steps_used == display_steps) || size_limit_display_reached);
+            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((reduce_limit, display_term, display_steps_used)) })));
         } else {
             // normal form found
             let term_size = term_size(&red_term);
@@ -763,11 +798,42 @@ fn check_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Ter
 } 
 
 fn print_term(term: &Term) -> String {
-    match term {
-        Index(n) => n.to_string(),
-        Lambda(x) => "λ".to_owned() + &print_term(x),
-        App(x, y) => format!("({}){}", print_term(x), print_term(y)),
+    let switch = false;
+    if switch {
+        match term {
+            Index(n) => n.to_string(),
+            Lambda(x) => "λ".to_owned() + &print_term(x),
+            App(x, y) => format!("({}){}", print_term(x), print_term(y)),
+        }
+    } else {
+        match term {
+            Index(n) => n.to_string(),
+            Lambda(x) => "λ".to_owned() + &print_term(x),
+            App(x, y) => format!("A{}{}", print_term(x), print_term(y)),
+        }
     }
+}
+
+fn print_terms(terms: &[Term]) -> String {
+    let mut out = String::new();
+    out.push('[');
+    for term in terms {
+        out.push_str(&print_term(term));
+        out.push_str(&", ")
+    }
+    out.push(']');
+    out
+}
+
+fn print_term_refs(terms: &[&Term]) -> String {
+    let mut out = String::new();
+    out.push('[');
+    for term in terms {
+        out.push_str(&print_term(term));
+        out.push_str(&", ")
+    }
+    out.push(']');
+    out
 }
 
 fn display_solved_term(t: &Term, r: &Term, steps: u32, size: u32) {
@@ -786,6 +852,17 @@ fn display_subset_term(t: &Term, s: u32, e: u32) {
     println!("{} subset from {} to {}", print_term(t), s, e);
 }
 
+// if a duplicate exists, returns it
+fn find_duplicate<H: Hash + Eq>(objs: &Vec<H>) -> Option<&H> {
+    let mut hs = HashSet::new();
+    for obj in objs {
+        if !hs.insert(obj) {
+            return Some(obj);
+        }
+    }
+    return None;
+}
+
 fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_steps: u32) {
     let total_len = red_output.len();
     
@@ -797,7 +874,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
     for output in red_output {
         match output {
             (t, Unsolved(UnsolvedData{reduce_nf: Some((_, r, _))})) => unsolved.push((t, r)),
-            (t, Unsolved(UnsolvedData{reduce_nf: None})) => panic!("no unsolved data"),
+            (_t, Unsolved(UnsolvedData{reduce_nf: None})) => panic!("no unsolved data"),
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             (t, Subset(start, end)) => subset_terms.push((t, start, end)),
@@ -932,16 +1009,24 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    let max_size = 26;
-    let step_limit = 60;
+    let max_size = 25;
+    let step_limit = 100;
+    let size_limit = 100_000;
     let display_steps = 10;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\n\nsize: {}", size);
         let input = table[size][0].clone();
-        let red_terms = reduce_list_of_terms(input, step_limit, display_steps);
+        println!("num terms: {}", input.len());
+        if let Some(duplicate) = find_duplicate(&input) {
+            panic!("size {} duplicate term {}\nall terms: {}", size, print_term(duplicate), print_terms(&input));
+        }
+        let red_terms = reduce_list_of_terms(input, step_limit, size_limit, display_steps);
+        println!("terms red");
         let loop_terms = check_loops(red_terms, 10, 40);
+        println!("terms loop");
         let subset_terms = check_subset_terms(loop_terms, 10);
+        println!("terms subset");
         let output = subset_terms;
         display_output(output, step_limit, display_steps);
     }
@@ -1063,23 +1148,22 @@ mod test {
     #[test]
     fn test_nf_reduce() {
         let t = t_str(&"λ(λ2)λ1");
-        let (nf_t, _) = nf_reduce(&t, 10);
+        let (nf_t, _, _) = nf_reduce(&t, 10, 1_000);
         let ans = t_str(&"λ1");
         assert_eq!(nf_t, ans);
 
-        assert_eq!(nf_reduce(&t_str(&"λ(λ(2)1)1"), 10).0, t_str(&"λ(1)1"));
-        assert_eq!(nf_reduce(&t_str(&"λ(λ(1)2)1"), 10).0, t_str(&"λ(1)1"));
-        assert_eq!(nf_reduce(&t_str(&"λλ(λ1)λ3"), 10).0, t_str(&"λλλ3"));
-        assert_eq!(nf_reduce(&t_str(&"λλ(λ3)λ1"), 10).0, t_str(&"λλ2"));
-
-        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)1"), 10).0, t_str(&"λλ2"));
-        assert_eq!(nf_reduce(&t_str(&"λλ(λλ2)2"), 10).0, t_str(&"λλλ3"));
-        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)λ2"), 10).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λ(2)1)1"), 10, 1_000).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λ(1)2)1"), 10, 1_000).0, t_str(&"λ(1)1"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λ1)λ3"), 10, 1_000).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λ3)λ1"), 10, 1_000).0, t_str(&"λλ2"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)1"), 10, 1_000).0, t_str(&"λλ2"));
+        assert_eq!(nf_reduce(&t_str(&"λλ(λλ2)2"), 10, 1_000).0, t_str(&"λλλ3"));
+        assert_eq!(nf_reduce(&t_str(&"λ(λλ2)λ2"), 10, 1_000).0, t_str(&"λλλ3"));
 
         let x = t_str(&"λλλ(λ(λλ3)(1)2)(1)λ4");
         let x_red_1 = nf_reduce_step(x.clone()).unwrap();
         let x_red_1_str = print_term(&x_red_1);
-        let (x_red, _steps) = nf_reduce(&x, 10);
+        let (x_red, _steps, _) = nf_reduce(&x, 10, 1_000);
         // dbg!(steps);
         let x_red_str = print_term(&x_red);
         let y = t_str(&"λλλ(λλ(3)λ6)((1)λ4)1");

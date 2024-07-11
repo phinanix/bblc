@@ -1,29 +1,64 @@
 
 11 July 24
 Checking only for halting and loops, unsolved terms by size
-22  3
-23  0
-24  5
-25  7
-
-15
-26  22
-27  12
-
-49
-28  128
-177
-29  140
-317
-30  337
-654
-31  527
-1181
+22  3     3
+23  0     3
+24  5     8
+25  7     15
+26  22    37
+27  12    49
+28  128   177
+29  140   317
+30  337   654
+31  527   1181
 32 
 
+the above numbers were wrong, oops 😬
+new numbers, loops only: 
+22  3     3
+23  0     3
+24  5     8
+25  6     14
+26  22    36
+27  11    47
+28  101   148
+29  136   284
+30  303   587
+31  
+32  
+
 term that crashes min_loop: (λ(1)1)λ((1)λ2)λ(1)2
+term that OOMs: 
+size 30 reducing AλA11λλAA22A11
+size 30 reducing AλA11λλAA22A11
+another term that crashes min_loop (this time of size 31): AλA11λAA1λA1λ21
+
 
 twi stuff
 528 -> 580 twi code (53 lines)
 581 -> 750 mostly duplicated  (169 lines)
 total: 222 lines
+
+twi notes: 
+I went to a lot of trouble and duplicating code to make the twi thing, but I think
+in retrospect the move was probably actually just to use the built in hash function?
+the term to u64 thing I wrote is basically a hash, and the caching is done in a very
+inefficient way, so it is probably better to not cache at all, would be my guess. 
+
+separately, I was expecting subsets to solve up to size 25, but I'm no longer sure 
+that is correct. there are 4 terms remaining at size 24, of which it looks at a 
+glance like 2 of them are things we "should solve" and 2 are things that aren't 
+solved by subsets (but are solved by different-reduction-order). The latter 2 
+are just versions of the size 25 terms needing DRO that I already knew about, 
+but I missed previously. 
+
+july 11 todos
+* figure out why terms are not subseting
+* figure out why terms are not unique
+* mb display looping or subsetting more accurately
+* figure out why min_loop crashes
+* implement different-reduction-order 
+* implement subset using just hashes and check if it is faster
+
+terms are not unique bug:
+size 8 open 1
