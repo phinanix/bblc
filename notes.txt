@@ -5,13 +5,25 @@ Checking only for halting and loops, unsolved terms by size
 23  0
 24  5
 25  7
+
+15
 26  22
 27  12
-28  128
-29  140
-30  337
 
+49
+28  128
+177
+29  140
+317
+30  337
 654
 31  527
 1181
 32 
+
+term that crashes min_loop: (λ(1)1)λ((1)λ2)λ(1)2
+
+twi stuff
+528 -> 580 twi code (53 lines)
+581 -> 750 mostly duplicated  (169 lines)
+total: 222 lines

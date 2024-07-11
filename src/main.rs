@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 use itertools::Itertools;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -420,9 +422,15 @@ enum TermRes {
     */
     Reduced(Term, u32, u32),
     /*
-    the start and end number of reduction steps that we reduced the term for that results in a loop
+    the start and end number of reduction steps that we reduced the term for that
+    results in a loop
      */
     Looped(u32, u32),
+    /*
+    the start and end number of reduction steps, let the term reduced for those 
+    step counts be S and E. then S is a nf-order-reducing subterm of E
+     */
+    Subset(u32, u32),
 }
 use TermRes::*;
 
@@ -509,7 +517,246 @@ fn check_loops(terms: Vec<(Term, TermRes)>, loop_base: u32, loop_limit: u32) -> 
         match prev_res {
             Reduced(_, _, _) => out.push((term, prev_res)),
             Unsolved(ud) => out.push(check_loop(term, ud, loop_base, loop_limit)),
-            Looped(_, _) => panic!("shouldn't loop yet lol")
+            // todo: fix these dumb match arms
+            Looped(_, _) => panic!("shouldn't loop yet lol"),
+            Subset(_, _) => panic!("shouldn't subset yet lol"),
+        }
+    }
+    out
+} 
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
+enum TermWithIdR {
+    Lambda(Box<TermWithId>),
+    App(Box<TermWithId>, Box<TermWithId>),
+    Index(u8)
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
+struct TermWithId {id: Option<u64>, term: TermWithIdR}
+
+// fn get_id(twi: &TermWithId) -> Option<u64> {
+//     match twi {
+//         TermWithId::Lambda(id, _) => *id,
+//         TermWithId::App(id, _, _) => *id,
+//         TermWithId::Index(id, _) => *id,
+//     }
+// }
+
+fn twi_to_term(twi: TermWithId) -> Term {
+    match twi {
+        TermWithId {term: TermWithIdR::Lambda(sub_twi), .. } => Lambda(Box::new(twi_to_term(*sub_twi))),
+        TermWithId {term: TermWithIdR::App(left_twi, right_twi) , ..} 
+            => App(Box::new(twi_to_term(*left_twi)), Box::new(twi_to_term(*right_twi))),
+        TermWithId {term: TermWithIdR::Index(n), .. } => Index(n),
+    }
+}
+
+fn term_to_twi(term: Term) -> TermWithId {
+    let id = term_to_u64(&term);
+    let twir = match term {
+        Lambda(subterm) => TermWithIdR::Lambda(Box::new(term_to_twi(*subterm))),
+        App(left_term, right_term) => TermWithIdR::App(Box::new(term_to_twi(*left_term)), Box::new(term_to_twi(*right_term))),
+        Index(n) => TermWithIdR::Index(n),
+    };
+    TermWithId { id, term: twir }
+}
+
+fn twi_lambda(twi: TermWithId) -> TermWithId {
+    let id = term_to_u64(&Lambda(Box::new(twi_to_term(twi.clone()))));
+    TermWithId { id, term: TermWithIdR::Lambda(Box::new(twi)) }
+}
+
+fn twi_app(left_twi: TermWithId, right_twi: TermWithId) -> TermWithId {
+    let normal_term = App(Box::new(twi_to_term(left_twi.clone())), Box::new(twi_to_term(right_twi.clone())));
+    let id = term_to_u64(&normal_term);
+    TermWithId { id, term: TermWithIdR::App(Box::new(left_twi), Box::new(right_twi)) }
+}
+
+fn twi_index(n: u8) -> TermWithId {
+    let id = term_to_u64(&Index(n));
+    TermWithId { id, term: TermWithIdR::Index(n) }
+}
+
+fn re_de_bruijn_substituent_recur_twi(body_level: u8, substituent: &TermWithId, substituent_level: u8) -> TermWithId {
+    assert!(body_level > 0);
+    if body_level == 1 { 
+        return substituent.clone() 
+    };
+    match &substituent.term {
+        TermWithIdR::Index(n) => 
+            if *n > substituent_level {twi_index(n + body_level - 1)} else {twi_index(*n)},
+        TermWithIdR::Lambda(x) => 
+            twi_lambda(
+                re_de_bruijn_substituent_recur_twi(body_level, &x, substituent_level+1)
+            ),
+        TermWithIdR::App(x, y) => 
+            twi_app(re_de_bruijn_substituent_recur_twi(body_level, &x, substituent_level),
+                re_de_bruijn_substituent_recur_twi(body_level, &y, substituent_level)
+            ),
+    }
+}
+
+fn re_de_bruijn_substituent_twi(level: u8, substituent: &TermWithId) -> TermWithId {
+    re_de_bruijn_substituent_recur_twi(level, substituent, 0)
+}
+
+fn substitute_level_twi(body: TermWithId, substituent: &TermWithId, level: u8) -> TermWithId {
+    match body.term {
+        TermWithIdR::Index(n) => {
+            if n == level {
+                re_de_bruijn_substituent_twi(level, substituent)
+            } else if n > level {
+                // in something like λ6, we need to take into account that there is 
+                // one fewer lambda between the variable and its target now
+                assert!(n != 1); //, "body {} substi {} level {}", print_term(&body), print_term(&substituent), level);
+                twi_index(n-1)
+            } else {
+                // whereas in something like λλλ1, we don't need to change the 1
+                twi_index(n) 
+            }
+        },
+        TermWithIdR::Lambda(x) => twi_lambda(substitute_level_twi(*x, substituent, level+1)),
+        TermWithIdR::App(x, y) => 
+            twi_app(substitute_level_twi(*x, substituent, level), 
+                substitute_level_twi(*y, substituent, level))
+    }
+}
+
+
+// if you have a term like (λT) S then body is T and substituent is S 
+fn substitute_twi(body: TermWithId, substituent: &TermWithId) -> TermWithId {
+    // dbg!(format!("substituting {} into {}", print_term(substituent), print_term(&body)));
+    let ans = substitute_level_twi(body, &substituent, 1);
+    // dbg!(format!("ans: {}", print_term(&ans)));
+    ans
+}
+
+
+// weak head normal form, E := (\x -> term) or (x term_1 . . . term_n)
+// returns none if there is no reduction
+// the idea is whenever we try to reduce a subterm, we check if that id is already 
+// in the hashmap. if so we have hit a subterm-loop and we abort the whole reduction
+// 
+fn whnf_reduce_step_check_subset(term: TermWithId, hm: &HashMap<u64, u32>, cur_step: u32) -> Result<Option<TermWithId>, (u32, u32)> {
+    if let Some(cur_id) = term.id {
+        if let Some(&prev_step) = hm.get(&cur_id) {
+            // what we have here is a subset proof
+            return Err((prev_step, cur_step));
+        }
+    }
+    
+    match term.term {
+        TermWithIdR::Lambda(_) => Ok(None),
+        TermWithIdR::Index(_) => Ok(None),
+        TermWithIdR::App(x, y) => {
+            // we might need to reduce two things. first, reduce x to whnf. second, 
+            // if that x is a lambda, then we need to substitute. 
+            if let Some(x_reduced) = whnf_reduce_step_check_subset(*x.clone(), hm, cur_step)? {
+                Ok(Some(twi_app(x_reduced, *y)))
+            } else {
+                match x.term {
+                    TermWithIdR::App(_, _) => Ok(None),
+                    TermWithIdR::Index(_) => Ok(None),
+                    TermWithIdR::Lambda(z) => Ok(Some(substitute_twi(*z, &y))),
+                }
+            }
+        },
+    }
+}
+
+// normal form, ie E = (\x. E) or x E_1 . . . E_n
+// returns None if there is no reduction
+fn nf_reduce_step_check_subset(term: TermWithId, hm: &HashMap<u64, u32>, cur_step: u32) -> Result<Option<TermWithId>, (u32, u32)> {
+    if let Some(cur_id) = term.id {
+        if let Some(&prev_step) = hm.get(&cur_id) {
+            // what we have here is a subset proof
+            return Err((prev_step, cur_step));
+        }
+    }
+        
+    match term.term {
+        TermWithIdR::Index(_) => Ok(None),
+        TermWithIdR::Lambda(x) => 
+            if let Some(new_term) = nf_reduce_step_check_subset(*x, hm, cur_step)? {
+                Ok(Some(twi_lambda(new_term)))
+            } else {
+                Ok(None)
+            },
+        TermWithIdR::App(x, y) => {
+            // first reduce x to whnf, if it becomes a lambda, then substitute. 
+            // otherwise, reduce first x, then y to nf. 
+            if let Some(x_reduced) = whnf_reduce_step_check_subset(*x.clone(), hm, cur_step)? {
+                Ok(Some(twi_app(x_reduced, *y)))
+            } else if let TermWithIdR::Lambda(z) = x.term {
+                Ok(Some(substitute_twi(*z, &y)))
+            } else if let Some(x_reduced) = nf_reduce_step_check_subset(*x.clone(), hm, cur_step)? {
+                Ok(Some(twi_app(x_reduced, *y)))
+            } else if let Some(y_reduced) = nf_reduce_step_check_subset(*y.clone(), hm, cur_step)? {
+                Ok(Some(twi_app(*x, y_reduced)))
+            } else {
+                Ok(None)
+            }
+        },
+    }
+}
+
+// Ok(term after reduction, steps of reduction)
+// Err(start, end) // for subset proof
+fn nf_reduce_twi(term: &TermWithId, reduce_limit: u32, hm: &HashMap<u64, u32>, cur_step: u32) 
+    -> Result<(TermWithId, u32), (u32, u32)> 
+{
+    let mut counter = 0;
+    let mut cur_term = term.clone();
+    while let Some(reduced_term) = nf_reduce_step_check_subset(cur_term.clone(), hm, cur_step)? {
+        cur_term = reduced_term;
+        counter += 1;
+        if counter == reduce_limit {
+            break
+        }
+    }
+    Ok((cur_term, counter))
+}
+
+
+/*  
+the goal is to check whether on step n, we try to reduce as a subterm the entire 
+term that we were trying to reduce on step k < n
+*/
+fn check_subset_term(term: Term, ud: UnsolvedData, check_limit: u32) -> (Term, TermRes) {
+    let orig_term = term.clone();
+    let mut cur_term = term_to_twi(term.clone());
+    let mut hm = HashMap::new();
+    for step in 0..check_limit {
+        let mb_cur_id = cur_term.id;
+
+        // TODO: either implement or remove this
+        // if let Some(prev_step) = hm.insert(cur_id, step) {
+        //     // we have already seen the full top level term, so this is a loop
+        //     return find_min_loop(orig_term, step - prev_step, prev_step);
+        // }
+
+        cur_term = match nf_reduce_step_check_subset(cur_term, &hm, step) {
+            Ok(None) => return (orig_term, Unsolved(ud)),
+            Ok(Some(red_term)) => red_term,
+            Err((start, end)) => return (orig_term, Subset(start, end)),
+        };
+        if let Some(cur_id) = mb_cur_id {
+            hm.insert(cur_id, step);
+        }
+    }
+    return (orig_term, Unsolved(ud))
+}
+
+fn check_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Term, TermRes)> {
+    let mut out = vec![];
+    for (term, prev_res) in terms {
+        match prev_res {
+            // todo: fix these dumb match arms
+            Reduced(_, _, _) => out.push((term, prev_res)),
+            Looped(_, _) => out.push((term, prev_res)),
+            Unsolved(ud) => out.push(check_subset_term(term, ud, check_limit)),
+            Subset(_, _) => panic!("shouldn't subset yet lol"),
         }
     }
     out
@@ -535,19 +782,26 @@ fn display_looped_term(t: &Term, s: u32, e: u32) {
     println!("{} looped from {} to {}", print_term(t), s, e);
 }
 
+fn display_subset_term(t: &Term, s: u32, e: u32) {
+    println!("{} subset from {} to {}", print_term(t), s, e);
+}
+
 fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_steps: u32) {
     let total_len = red_output.len();
     
     // split into solved and holdouts 
     let mut nf_terms = vec![];
     let mut loop_terms = vec![];
+    let mut subset_terms = vec![];
     let mut unsolved = vec![];
     for output in red_output {
         match output {
             (t, Unsolved(UnsolvedData{reduce_nf: Some((_, r, _))})) => unsolved.push((t, r)),
+            (t, Unsolved(UnsolvedData{reduce_nf: None})) => panic!("no unsolved data"),
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
-            _ => panic!("failed to match")
+            (t, Subset(start, end)) => subset_terms.push((t, start, end)),
+            // _ => panic!("failed to match")
         }
     }
 
@@ -562,6 +816,17 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
         sorted_by_end.reverse();
         for (t, s, e) in &sorted_by_end[0..10.min(sorted_by_end.len())] {
             display_looped_term(t, *s, *e);
+        }
+
+    }
+
+    if subset_terms.len() > 0 {
+        println!("\n{} terms were solved by subsets", subset_terms.len());
+        let mut sorted_by_end = subset_terms.clone();
+        sorted_by_end.sort_by_key(|(_t, _s, e)| *e);
+        sorted_by_end.reverse();
+        for (t, s, e) in &sorted_by_end[0..10.min(sorted_by_end.len())] {
+            display_subset_term(t, *s, *e);
         }
 
     }
@@ -667,16 +932,17 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    // next todo item: solve terms that loop, but start looping later than step 1
-    let max_size = 32;
-    let step_limit = 100;
+    let max_size = 26;
+    let step_limit = 60;
     let display_steps = 10;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
         println!("\n\n\nsize: {}", size);
         let input = table[size][0].clone();
         let red_terms = reduce_list_of_terms(input, step_limit, display_steps);
-        let output = check_loops(red_terms, 10, 40);
+        let loop_terms = check_loops(red_terms, 10, 40);
+        let subset_terms = check_subset_terms(loop_terms, 10);
+        let output = subset_terms;
         display_output(output, step_limit, display_steps);
     }
 }
