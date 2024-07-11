@@ -405,7 +405,10 @@ fn dp_list_terms_of_size_open(target_size: usize, target_openness: usize) -> Vec
 type Foo = (Term, Term);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-struct UnsolvedData {reduce_nf: Option<(Term, u32)>}
+/*
+    reduce_nf: (u32, Term, u32) = (reduce_limit, display_term, display_steps)
+*/
+struct UnsolvedData {reduce_nf: Option<(u32, Term, u32)>}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 enum TermRes {
@@ -429,7 +432,7 @@ return value: the original term, plus the output TermRes.
 the output is Unsolved if no normal form was found, and gives the term reduced for the max steps in the option
 the output is Reduced if a normal form was found
 */
-fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32) 
+fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32, display_steps: u32) 
     -> Vec<(Term, TermRes)>
 {
     let mut out = vec![];
@@ -437,7 +440,9 @@ fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32)
         let (red_term, steps) = nf_reduce(&term, reduce_limit);
         if steps == reduce_limit {
             // we failed
-            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((red_term, reduce_limit)) })));
+            let (display_term, display_steps_used) = nf_reduce(&term, display_steps);
+            assert_eq!(display_steps_used, display_steps);
+            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((reduce_limit, display_term, display_steps)) })));
         } else {
             // normal form found
             let term_size = term_size(&red_term);
@@ -522,15 +527,15 @@ fn display_solved_term(t: &Term, r: &Term, steps: u32, size: u32) {
     println!("{} reduced to {} in {} steps (output size: {})", print_term(t), print_term(r), steps, size)
 }
 
-fn display_unsolved_term(t: &Term, r: &Term, step_limit: u32) {
-    println!("{} reduced to {} (not in normal form) in {} steps", print_term(t), print_term(r), step_limit)
+fn display_unsolved_term(t: &Term, r: &Term, display_steps: u32) {
+    println!("{} reduced to {} (not in normal form) in {} steps", print_term(t), print_term(r), display_steps)
 }
 
 fn display_looped_term(t: &Term, s: u32, e: u32) {
     println!("{} looped from {} to {}", print_term(t), s, e);
 }
 
-fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
+fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_steps: u32) {
     let total_len = red_output.len();
     
     // split into solved and holdouts 
@@ -539,7 +544,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     let mut unsolved = vec![];
     for output in red_output {
         match output {
-            (t, Unsolved(UnsolvedData{reduce_nf: Some((r, _))})) => unsolved.push((t, r)),
+            (t, Unsolved(UnsolvedData{reduce_nf: Some((_, r, _))})) => unsolved.push((t, r)),
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             _ => panic!("failed to match")
@@ -551,7 +556,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     println!("There were {} terms, of which {} were solved and {} were unsolved", 
         total_len, num_solved, unsolved.len());
     if loop_terms.len() > 0 {
-        println!("{} terms were solved by looping", loop_terms.len());
+        println!("\n{} terms were solved by looping", loop_terms.len());
         let mut sorted_by_end = loop_terms.clone();
         sorted_by_end.sort_by_key(|(_t, _s, e)| *e);
         sorted_by_end.reverse();
@@ -566,7 +571,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     let mut sorted_by_steps = nf_terms.clone();
     sorted_by_steps.sort_by_key(|(_t, _r, steps, _size)|*steps);
     sorted_by_steps.reverse();
-    println!("maximum reduction steps: {}", sorted_by_steps[0].2);
+    println!("\nmaximum reduction steps: {}", sorted_by_steps[0].2);
     // and three such longest terms
     for (t, r, steps, size) in &sorted_by_steps[0..3.min(sorted_by_steps.len())] {
         display_solved_term(t, r, *steps, *size)
@@ -584,10 +589,12 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32) {
     }
 
     // display number of holdouts
-    println!("There were {} unsolved terms", unsolved.len());
+    println!("\nThere were {} unsolved terms", unsolved.len());
+    println!("All were reduced for {} steps without finding a normal form, but only {} steps are displayed.", 
+        step_limit, display_steps);
     // display some holdouts
     for (t, r) in &unsolved[0..10.min(unsolved.len())] {
-        display_unsolved_term(t, r, step_limit)
+        display_unsolved_term(t, r, display_steps);
     }
 }
 
@@ -663,13 +670,14 @@ fn main() {
     // next todo item: solve terms that loop, but start looping later than step 1
     let max_size = 26;
     let step_limit = 60;
+    let display_steps = 20;
     let table = dp_list_terms_of_size_open(max_size, 0);
     for size in 0..=max_size {
-        println!("\n\nsize: {}", size);
+        println!("\n\n\nsize: {}", size);
         let input = table[size][0].clone();
-        let red_terms = reduce_list_of_terms(input, step_limit);
+        let red_terms = reduce_list_of_terms(input, step_limit, display_steps);
         let output = check_loops(red_terms, 10, 40);
-        display_output(output, step_limit);
+        display_output(output, step_limit, display_steps);
     }
 }
 
