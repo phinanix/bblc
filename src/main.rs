@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
+use std::arch::x86_64;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::thread::yield_now;
 use itertools::Itertools;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -222,12 +224,13 @@ fn whnf_reduce(mut term: Term, reduce_limit: u32) -> (Term, u32) {
 fn nf_reduce_step(term: Term) -> Option<Term> {
     match term {
         Index(_) => None,
-        Lambda(x) => if let Some(new_term) = nf_reduce_step(*x) {
+        Lambda(x) => 
+        if let Some(new_term) = nf_reduce_step(*x) {
             Some(Lambda(Box::new(new_term)))
         } else {
             None
         },
-        App(x, y) => {
+        App(x, y) => 
             // first reduce x to whnf, if it becomes a lambda, then substitute. 
             // otherwise, reduce first x, then y to nf. 
             if let Some(x_reduced) = whnf_reduce_step(*x.clone()) {
@@ -240,8 +243,7 @@ fn nf_reduce_step(term: Term) -> Option<Term> {
                 Some(App(x, Box::new(y_reduced)))
             } else {
                 None
-            }
-        },
+            },
     }
 }
 
@@ -465,6 +467,7 @@ enum TermRes {
     step counts be S and E. then S is a nf-order-reducing subterm of E
      */
     Subset(u32, u32),
+    AdvSubset(u32, u32),
 }
 use TermRes::*;
 
@@ -554,8 +557,7 @@ fn check_loops(terms: Vec<(Term, TermRes)>, loop_base: u32, loop_limit: u32) -> 
             Reduced(_, _, _) => out.push((term, prev_res)),
             Unsolved(ud) => out.push(check_loop(term, ud, loop_base, loop_limit)),
             // todo: fix these dumb match arms
-            Looped(_, _) => panic!("shouldn't loop yet lol"),
-            Subset(_, _) => panic!("shouldn't subset yet lol"),
+            _ => panic!("unexpected 1"),
         }
     }
     out
@@ -791,15 +793,152 @@ fn check_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Ter
             // todo: fix these dumb match arms
             Reduced(_, _, _) => out.push((term, prev_res)),
             Looped(_, _) => out.push((term, prev_res)),
-            Unsolved(ud) => out.push(check_subset_term(term, ud, check_limit)),
-            Subset(_, _) => panic!("shouldn't subset yet lol"),
+            Unsolved(ud) => {
+                let ans = check_subset_term(term.clone(), ud.clone(), check_limit);
+                match ans.1 {
+                    Subset(s, e) => {
+                        let ans2 = nf_reduce_all_subsets(term.clone(), ud, check_limit);
+                        assert_eq!(ans2.1, AdvSubset(s, e), "failed on term {}", print_term(&term));
+                    }
+                    _ => (),
+                }
+                out.push(ans);
+            },
+            _ => panic!("unexpeted 2"),
         }
     }
     out
 } 
 
+
+//returns prev_step if known 
+fn hist_contains(history: &[Vec<(Term, u32)>], term: &Term) -> Option<u32> {
+    for level_hist in history {
+        for (prev_term, step) in level_hist {
+            if prev_term == term {
+                return Some(*step);
+            }
+        }
+    };
+    None
+}
+
+fn whnf_reduce_all_subsets_step(
+    term: Term, history: &mut Vec<Vec<(Term, u32)>>, level: usize, cur_step: u32
+) -> Result<Option<Term>, TermRes>
+{
+    // println!("w {} {}", level, print_term(&term));
+
+    // check if the history contains the current term up to this level; if so return nonhalt
+    if let Some(prev_step) = hist_contains(&history[0..level], &term) {
+        return Err(AdvSubset(prev_step, cur_step));
+    };
+    // add the current term to the history at the right level
+    while history.len() <= level {
+        history.push(vec![]);
+    };
+    history[level].push((term.clone(), cur_step));
+    
+    // perform one step of whnf_reduction
+    match term {
+        Index(_) => {
+            history.truncate(level); 
+            Ok(None)
+        },
+        Lambda(_) => {
+            history.truncate(level); 
+            Ok(None)
+        },
+        App(l, r) => match *l {
+            Lambda(body) => {
+                // println!("subbing into {} with {}", print_term(&body), print_term(&r));
+                Ok(Some(substitute(*body, &r)))
+            },
+            l => match whnf_reduce_all_subsets_step(l, history, level+1, cur_step)? {
+                None => Ok(None),
+                Some(l_reduced) => Ok(Some(App(Box::new(l_reduced), r))),
+            }
+        },
+    }
+}
+
+fn nf_reduce_all_subsets_step(
+    term: Term, history: &mut Vec<Vec<(Term, u32)>>, level: usize, cur_step: u32
+) -> Result<Option<Term>, TermRes> 
+{
+    // println!("{} {}", level, print_term(&term));
+    // check if the history contains the current term up to this level; if so return nonhalt
+    if let Some(prev_step) = hist_contains(&history[0..level], &term) {
+        return Err(AdvSubset(prev_step, cur_step));
+    };
+    // add the current term to the history at the right level
+    while history.len() <= level {
+        history.push(vec![]);
+    };
+    history[level].push((term.clone(), cur_step));
+
+    // perform one step of nf_reduction
+    match term {
+        Index(_) => Ok(None),
+        Lambda(sub_term) => 
+        if let Some(new_term) = nf_reduce_all_subsets_step(*sub_term, history, level+1, cur_step)? {
+            Ok(Some(Lambda(Box::new(new_term))))
+        } else {
+            history.truncate(level);
+            Ok(None)
+        },
+        App(l, r) => 
+        if let Some(l_reduced) = whnf_reduce_all_subsets_step(*l.clone(), history, level+1, cur_step)? {
+            Ok(Some(App(Box::new(l_reduced), r)))
+        } else if let Lambda(z) = *l {
+            // println!("subbing into {} with {}", print_term(&z), print_term(&r));
+            Ok(Some(substitute(*z, &r)))
+        } else if let Some(l_reduced) = nf_reduce_all_subsets_step(*l.clone(), history, level+1, cur_step)? {
+            Ok(Some(App(Box::new(l_reduced), r)))
+        } else if let Some(r_reduced) = nf_reduce_all_subsets_step(*r, history, level+1, cur_step)? {
+            Ok(Some(App(l, Box::new(r_reduced))))
+        } else {
+            history.truncate(level);
+            Ok(None)
+        },
+    }
+}
+
+fn nf_reduce_all_subsets(term: Term, ud: UnsolvedData, check_limit: u32)  -> (Term, TermRes) {
+    let orig_term = term.clone();
+    let mut current_term = term;
+
+//     println!("\nsolving {}", print_term(&orig_term));
+    let mut history = vec![];
+    for cur_step in 0..check_limit {
+        let prev_term = current_term.clone();
+        // println!("\nreducing {} {}", cur_step, print_term(&current_term));
+        current_term = match nf_reduce_all_subsets_step(current_term, &mut history, 0, cur_step) {
+            Ok(None) => panic!{"subsets limit should be smaller than red limit {} {}", print_term(&orig_term), print_term(&prev_term)},
+            Ok(Some(new_term)) => new_term,
+            Err(nonhalt_proof) => return (orig_term, nonhalt_proof),
+        };
+    }
+    (orig_term, Unsolved(ud))
+}
+
+fn check_all_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Term, TermRes)> {
+    let mut out = vec![];
+    for (term, prev_res) in terms {
+        match prev_res {
+            // todo: fix these dumb match arms
+            Reduced(_, _, _) => out.push((term, prev_res)),
+            Looped(_, _) => out.push((term, prev_res)),
+            Unsolved(ud) => out.push(nf_reduce_all_subsets(term, ud, check_limit)),
+            _ => panic!("unexpeted 2"),
+        }
+    }
+    out
+
+}
+
 fn print_term(term: &Term) -> String {
-    let switch = false;
+    let switch = true;
     if switch {
         match term {
             Index(n) => n.to_string(),
@@ -892,6 +1031,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             (t, Subset(start, end)) => subset_terms.push((t, start, end)),
+            (t, AdvSubset(start, end)) => subset_terms.push((t, start, end)),
             // _ => panic!("failed to match")
         }
     }
@@ -1040,11 +1180,15 @@ fn main() {
         println!("terms red");
         let loop_terms = check_loops(red_terms, 10, 40);
         println!("terms loop");
-        let subset_terms = check_subset_terms(loop_terms, 10);
+        let subset_terms = check_all_subset_terms(loop_terms, 20);
         println!("terms subset");
         let output = subset_terms;
         display_output(output, step_limit, display_steps);
     }
+
+    // let term = parse_term("λ((λ(1)1)λ(1)(λ1)1)1".to_owned()).unwrap();
+    // println!("{}", print_term_reduction(&term, 10));
+    // nf_reduce_all_subsets(term, UnsolvedData { reduce_nf: None }, 10);
 }
 
 mod test {
