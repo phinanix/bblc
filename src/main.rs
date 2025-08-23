@@ -1040,7 +1040,9 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
         }
     }
 
-    let num_solved = nf_terms.len() + loop_terms.len();
+    let num_solved = nf_terms.len() + loop_terms.len() + subset_terms.len();
+    let num_unsolved = unsolved.len(); 
+    assert_eq!(num_solved + num_unsolved, total_len);
 
     println!("There were {} terms, of which {} were solved and {} were unsolved", 
         total_len, num_solved, unsolved.len());
