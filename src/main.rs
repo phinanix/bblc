@@ -905,6 +905,10 @@ fn nf_reduce_all_subsets_step(
 }
 
 fn nf_reduce_all_subsets(term: Term, ud: UnsolvedData, check_limit: u32)  -> (Term, TermRes) {
+  // the goal of this function is to reduce a term to normal form, but keep track of all of the 
+  // subterms we're aiming to reduce during that. if we ever notice we're trying to reduce a 
+  // subterm that is the same as a subterm we were already in the middle of trying to reduce, 
+  // we can be sure we will never finish 
     let orig_term = term.clone();
     let mut current_term = term;
 
@@ -1164,7 +1168,7 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    let max_size = 32;
+    let max_size = 28;
     let step_limit = 100;
     let size_limit = 100_000;
     let display_steps = 10;
@@ -1189,6 +1193,18 @@ fn main() {
     // let term = parse_term("λ((λ(1)1)λ(1)(λ1)1)1".to_owned()).unwrap();
     // println!("{}", print_term_reduction(&term, 10));
     // nf_reduce_all_subsets(term, UnsolvedData { reduce_nf: None }, 10);
+
+    let term = parse_term("(λ(1)1)λ(1)(λ1)1".to_owned()).unwrap();
+    println!("{}", print_term_reduction(&term, 10));
+
+    // the next thing to do is DRO - "different reduction order" 
+    // you first reduce for some number 1 . . . k steps trying all possible reductions
+    // then you apply previous deciders & if they prove the new term does or does not halt, then the 
+    // original term has the same property 
+
+    // also this is a bug: 
+    //size 24  There were 8574 terms, of which 8569 were solved and 1 were unsolved
+
 }
 
 mod test {
