@@ -981,10 +981,10 @@ fn check_all_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<
 */
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-enum SubLoc {
-  LambdaD,//down
-  AppL, //left
-  AppR,
+enum SubLoc<'a> {
+  LambdaD, //down
+  AppL(&'a Term), // the term is left, so we keep a pointer to the right
+  AppR(&'a Term), // and vv 
 }
 /*
  the global term after reduction, 
@@ -992,19 +992,25 @@ enum SubLoc {
  the path from the root of the term to the location of the selected subterm
  */ 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-struct ReductionSpec {new_term: Term, reduced_subterm: Term, subterm_location: Vec<SubLoc>}
+struct ReductionSpec<'a> {new_term: Term, reduced_subterm: Term, subterm_location: Vec<SubLoc<'a>>}
 
-fn raise_spec_level(ReductionSpec { new_term, reduced_subterm, mut subterm_location }: ReductionSpec, sub_loc: SubLoc) -> ReductionSpec {
+fn raise_spec_level<'a>(
+  ReductionSpec { new_term, reduced_subterm, mut subterm_location }: ReductionSpec<'a>, 
+  sub_loc: SubLoc<'a>
+) -> ReductionSpec<'a> {
   subterm_location.push(sub_loc);
   match sub_loc {
-    SubLoc::LambdaD => ReductionSpec { new_term: Lambda(Box::new(new_term)), reduced_subterm, subterm_location },
-    SubLoc::AppL => todo!(),
-    SubLoc::AppR => todo!(),
+    SubLoc::LambdaD => 
+    ReductionSpec { new_term: Lambda(Box::new(new_term)), reduced_subterm, subterm_location },
+    SubLoc::AppL(right_term) => 
+      ReductionSpec { new_term: App(Box::new(new_term), Box::new(right_term.clone())), reduced_subterm, subterm_location },
+    SubLoc::AppR(left_term) => 
+      ReductionSpec { new_term: App(Box::new(left_term.clone()), Box::new(new_term)), reduced_subterm, subterm_location },
   }
   
 }
 
-fn raise_all_spec_level(specs: Vec<ReductionSpec>, sub_loc: SubLoc) -> Vec<ReductionSpec> {
+fn raise_all_spec_level<'a>(specs: Vec<ReductionSpec<'a>>, sub_loc: SubLoc<'a>) -> Vec<ReductionSpec<'a>> {
   specs.into_iter().map(|spec|raise_spec_level(spec, sub_loc)).collect()
 }
 
@@ -1027,8 +1033,8 @@ fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
         };
         all_specs.push(top_level_spec);
       }
-      let x_specs = raise_all_spec_level(all_reductions_of_term(x), SubLoc::AppL);
-      let y_specs = raise_all_spec_level(all_reductions_of_term(y), SubLoc::AppR);
+      let x_specs = raise_all_spec_level(all_reductions_of_term(x), SubLoc::AppL(&y));
+      let y_specs = raise_all_spec_level(all_reductions_of_term(y), SubLoc::AppR(&x));
       all_specs.extend(x_specs);
       all_specs.extend(y_specs);
       all_specs
