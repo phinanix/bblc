@@ -469,6 +469,7 @@ enum TermRes {
     Subset(u32, u32),
     /* 
     30 Aug 2025: I have no idea what this is and the code isn't called, yikes
+      same date update: I still don't know what it is, but it is called ...
      */
     AdvSubset(u32, u32),
     /* 
@@ -1042,8 +1043,11 @@ fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
   }
 }
 
-// a list, where each term in the list, is the reduced term, plus a list of RS that got you there
-fn arbitrary_reductions_of_depth(term: &Term, depth: u32) -> Vec<(Term, Vec<ReductionSpec>)> {
+// a list, where each term in the list, is the reduced term, 
+// plus a list of RS that got you there
+fn arbitrary_reductions_of_depth(term: &Term, depth: u32) 
+  -> Vec<(Term, Vec<ReductionSpec>)> 
+{
   let mut out = vec![(term.clone(), vec![])];
   for _d in 0..depth {
     let mut new_out = vec![];
@@ -1165,7 +1169,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             (t, Subset(start, end)) => subset_terms.push((t, start, end)),
-            (_t, AdvSubset(_start, _end)) => panic!("I have no idea what this is"),
+            (t, AdvSubset(start, end)) => subset_terms.push((t, start, end)),
             (t, DroNonhalt(depth, dro_term, proof)) => dro_terms.push((t, depth, dro_term, proof)),
 
         }
@@ -1606,8 +1610,58 @@ mod test {
       check_terms_present_in_reductions(&three_ids, &ans_terms);
     }
 
+
+    fn check_terms_present_in_depth_reductions(term: &Term, depth: u32, ans_terms: &[Term]) {
+      assert!(ans_terms.iter().all_unique());
+      let depth_reductions = arbitrary_reductions_of_depth(term, depth);
+      let found_terms: HashSet<Term> = depth_reductions.into_iter()
+        .map(|(term, _)|term)
+        .unique().collect();
+      assert_eq!(found_terms.len(), ans_terms.len()); 
+      for ans in ans_terms {
+        assert!(found_terms.contains(&ans), "{:?}", ans);
+      }
+    }
+
     #[test]
     fn test_arbitrary_reductions_of_depth() {
-      
+      let terms_with_no_reductions = [id(), zero(), one()]; 
+      for term in terms_with_no_reductions {
+        let zero_red = arbitrary_reductions_of_depth(&term, 0);
+        assert_eq!(zero_red, vec![(term.clone(), vec![])]);
+        for depth in 1..=3 {
+          let d_red = arbitrary_reductions_of_depth(&term, depth);
+          assert_eq!(d_red, vec![])
+        }
+      }
+
+      // dup (dup dup)
+      let dup_of_dupdup = t_str("(λ(1)1)(λ(1)1)λ(1)1");
+      // depth 1 is is dup (dup dup) or (dup dup) (dup dup)
+      let depth_1_terms = [dup_of_dupdup.clone(), t_str("((λ(1)1)λ(1)1)(λ(1)1)λ(1)1")];
+      check_terms_present_in_depth_reductions(&dup_of_dupdup, 1, &depth_1_terms);
+      // depth 2 is actually identical
+      check_terms_present_in_depth_reductions(&dup_of_dupdup, 2, &depth_1_terms);
+      check_terms_present_in_depth_reductions(&dup_of_dupdup, 3, &depth_1_terms);
+
+      // (dup dup) dup 
+      // output is (dup dup) dup
+      let dupdup_of_dup = t_str("((λ(1)1)λ(1)1)λ(1)1");
+      // since depth 1 is the same, all depths are the same
+      let ans_terms = [dupdup_of_dup.clone()];
+      for depth in 0..=4 {
+        check_terms_present_in_depth_reductions(&dupdup_of_dup, depth, &ans_terms);
+      }
+
+      // \x. (id x) (id x) (id x) 
+      // output is \x. x (id x) (id x) and so on (3) 
+      // id x is (λ1)1
+      let three_ids = t_str("λ(((λ1)1)(λ1)1)(λ1)1");
+      let depth_1_terms = [t_str("λ((1)(λ1)1)(λ1)1"), t_str("λ(((λ1)1)1)(λ1)1"), t_str("λ(((λ1)1)(λ1)1)1")];
+      check_terms_present_in_depth_reductions(&three_ids, 1, &depth_1_terms);
+      let depth_2_terms = [t_str("λ((1)1)(λ1)1"), t_str("λ(((λ1)1)1)1"), t_str("λ((1)(λ1)1)1")];
+      check_terms_present_in_depth_reductions(&three_ids, 2, &depth_2_terms);
+      let depth_3_terms = [t_str("λ((1)1)1")];
+      check_terms_present_in_depth_reductions(&three_ids, 3, &depth_3_terms);
     }
   }
