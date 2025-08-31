@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::arch::x86_64;
+use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::thread::yield_now;
@@ -477,9 +478,24 @@ enum TermRes {
     the resulting term
     and the proof that the resulting term doesn't halt
      */
-    DroNonhalt(u32, Term, Box<TermRes>),
+    DroNonhalt(u32, Term, Vec<ReductionSpec>, Box<TermRes>),
 }
 use TermRes::*;
+
+fn nf_reduce_one_term(term: Term, reduce_limit: u32, size_limit: u32, display_steps: u32)
+-> (Term, TermRes) {
+  let (red_term, steps, size_limit_reached) = nf_reduce(&term, reduce_limit, size_limit);
+  if steps == reduce_limit || size_limit_reached {
+      // we failed
+      let (display_term, display_steps_used, size_limit_display_reached) = nf_reduce(&term, display_steps, size_limit);
+      assert!((display_steps_used == display_steps) || size_limit_display_reached);
+      (term, Unsolved(UnsolvedData { reduce_nf: Some((reduce_limit, display_term, display_steps_used)) }))
+  } else {
+      // normal form found
+      let term_size = term_size(&red_term);
+      (term, Reduced(red_term, steps, term_size))
+  }
+}
 
 /*
 attempt to reduce all terms to normal form. 
@@ -493,17 +509,7 @@ fn reduce_list_of_terms(terms: Vec<Term>, reduce_limit: u32, size_limit: u32, di
     let mut out = vec![];
     for term in terms {
         // println!("size {} reducing {}", term_size(&term), print_term(&term));
-        let (red_term, steps, size_limit_reached) = nf_reduce(&term, reduce_limit, size_limit);
-        if steps == reduce_limit || size_limit_reached {
-            // we failed
-            let (display_term, display_steps_used, size_limit_display_reached) = nf_reduce(&term, display_steps, size_limit);
-            assert!((display_steps_used == display_steps) || size_limit_display_reached);
-            out.push((term, Unsolved(UnsolvedData { reduce_nf: Some((reduce_limit, display_term, display_steps_used)) })));
-        } else {
-            // normal form found
-            let term_size = term_size(&red_term);
-            out.push((term, Reduced(red_term, steps, term_size)));
-        }
+        out.push(nf_reduce_one_term(term, reduce_limit, size_limit, display_steps))
     }
     out
 }
@@ -560,15 +566,19 @@ fn check_loop(term: Term, ud: UnsolvedData, loop_base: u32, loop_limit: u32) -> 
     (orig_term, Unsolved(ud))
 }
 
+fn check_loop_wrap((term, prev_res): (Term, TermRes), loop_base: u32, loop_limit: u32) -> (Term, TermRes) {
+  match prev_res {
+    Reduced(_, _, _) => (term, prev_res),
+    Unsolved(ud) => check_loop(term, ud, loop_base, loop_limit),
+    // todo: fix these dumb match arms
+    _ => panic!("unexpected 1"),
+  }
+}
+
 fn check_loops(terms: Vec<(Term, TermRes)>, loop_base: u32, loop_limit: u32) -> Vec<(Term, TermRes)> {
     let mut out = vec![];
-    for (term, prev_res) in terms {
-        match prev_res {
-            Reduced(_, _, _) => out.push((term, prev_res)),
-            Unsolved(ud) => out.push(check_loop(term, ud, loop_base, loop_limit)),
-            // todo: fix these dumb match arms
-            _ => panic!("unexpected 1"),
-        }
+    for pair in terms {
+      out.push(check_loop_wrap(pair, loop_base, loop_limit))
     }
     out
 } 
@@ -813,7 +823,7 @@ fn check_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Ter
                 }
                 out.push(ans);
             },
-            _ => panic!("unexpeted 2"),
+            _ => panic!("unexpected 2"),
         }
     }
     out
@@ -935,16 +945,19 @@ fn nf_reduce_all_subsets(term: Term, ud: UnsolvedData, check_limit: u32)  -> (Te
     (orig_term, Unsolved(ud))
 }
 
+fn check_all_subset((term, prev_res): (Term, TermRes), check_limit: u32) -> (Term, TermRes) {
+  match prev_res {
+    // todo: fix these dumb match arms
+    Reduced(_, _, _) => (term, prev_res),
+    Looped(_, _) => (term, prev_res),
+    Unsolved(ud) => nf_reduce_all_subsets(term, ud, check_limit),
+    _ => panic!("unexpected 3"),
+  }
+}
 fn check_all_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<(Term, TermRes)> {
     let mut out = vec![];
-    for (term, prev_res) in terms {
-        match prev_res {
-            // todo: fix these dumb match arms
-            Reduced(_, _, _) => out.push((term, prev_res)),
-            Looped(_, _) => out.push((term, prev_res)),
-            Unsolved(ud) => out.push(nf_reduce_all_subsets(term, ud, check_limit)),
-            _ => panic!("unexpeted 2"),
-        }
+    for pair in terms {
+      out.push(check_all_subset(pair, check_limit))
     }
     out
 
@@ -1068,8 +1081,43 @@ fn arbitrary_reductions_of_depth(term: &Term, depth: u32)
   out 
 }
 
-fn dro_term(term: &Term, max_depth: u32) -> (Term, TermRes) {
-  todo!()
+fn attempt_solve_term(term: Term) -> TermRes {
+  let nf_res = nf_reduce_one_term(term, 50, 100_000, 10);
+  let loop_res = check_loop_wrap(nf_res, 10, 40);
+  let subset_res = check_all_subset(loop_res, 20);
+  subset_res.1
+}
+
+fn dro_term(original_term: &Term, ud: UnsolvedData, max_depth: u32) -> (Term, TermRes) {
+  let mut prev_seen_terms = HashSet::new();
+  prev_seen_terms.insert(original_term.clone());
+  for depth in 1..=max_depth {
+    let possible_terms = arbitrary_reductions_of_depth(original_term, depth);
+    let unseen_terms = possible_terms.into_iter()
+      .filter(|t|!prev_seen_terms.contains(&t.0));
+    for (term, rs) in unseen_terms {
+      match attempt_solve_term(term.clone()) {
+        Unsolved(_) => (), 
+        solved => {
+          let term_res = DroNonhalt(depth, term, rs, Box::new(solved));
+          return (original_term.clone(), term_res)
+        }
+      }
+    }
+  }
+  return (original_term.clone(), Unsolved(ud))
+}
+
+fn dro_all_terms(terms: Vec<(Term, TermRes)>, max_depth: u32) -> Vec<(Term, TermRes)> {
+  let mut out = vec![];
+  for (term, prev_res) in terms {
+    match prev_res {
+      DroNonhalt(_, _, _, _) => panic!("unexpected 4"),
+      Unsolved(ud) => out.push(dro_term(&term, ud, max_depth)),
+      _ => out.push((term, prev_res)),
+    }
+  }
+  out
 }
 
 // end DRO 
@@ -1142,6 +1190,11 @@ fn display_subset_term(t: &Term, s: u32, e: u32) {
     println!("{} subset from {} to {}", print_term(t), s, e);
 }
 
+fn display_dro_term(t: &Term, depth: u32, reduced_term: &Term, proof: Box<TermRes>) {
+  println!("{} original, depth {} reduced to {} which was solved by {:?}", 
+            print_term(t), depth, print_term(reduced_term), proof);
+}
+
 // if a duplicate exists, returns it
 fn find_duplicate<H: Hash + Eq>(objs: &Vec<H>) -> Option<&H> {
     let mut hs = HashSet::new();
@@ -1170,7 +1223,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             (t, Subset(start, end)) => subset_terms.push((t, start, end)),
             (t, AdvSubset(start, end)) => subset_terms.push((t, start, end)),
-            (t, DroNonhalt(depth, dro_term, proof)) => dro_terms.push((t, depth, dro_term, proof)),
+            (t, DroNonhalt(depth, dro_term, rs, proof)) => dro_terms.push((t, depth, dro_term, rs, proof)),
 
         }
     }
@@ -1203,6 +1256,12 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
 
     if dro_terms.len() > 0 {
       println!("\n{} terms were solved by DRO", dro_terms.len()); 
+      let mut sorted_by_depth = dro_terms.clone(); 
+      sorted_by_depth.sort_by_key(|tup| tup.1); 
+      sorted_by_depth.reverse(); 
+      for (t, depth, reduced_term, _rs, proof) in sorted_by_depth {
+        display_dro_term(&t, depth, &reduced_term, proof);
+      }
     }
 
     if nf_terms.len() > 0 {
@@ -1325,7 +1384,8 @@ fn main() {
         println!("terms loop");
         let subset_terms = check_all_subset_terms(loop_terms, 20);
         println!("terms subset");
-        let output = subset_terms;
+        let dro_terms = dro_all_terms(subset_terms, 4);
+        let output = dro_terms;
         display_output(output, step_limit, display_steps);
     }
 
