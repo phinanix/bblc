@@ -980,11 +980,11 @@ fn check_all_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<
   currently known nonhalting deciders. then assembles any proof into a nice certificate. 
 */
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-enum SubLoc<'a> {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+enum SubLoc {
   LambdaD, //down
-  AppL(&'a Term), // the term is left, so we keep a pointer to the right
-  AppR(&'a Term), // and vv 
+  AppL(Term), // the term is left, so we keep a pointer to the right
+  AppR(Term), // and vv 
 }
 /*
  the global term after reduction, 
@@ -992,13 +992,13 @@ enum SubLoc<'a> {
  the path from the root of the term to the location of the selected subterm
  */ 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-struct ReductionSpec<'a> {new_term: Term, reduced_subterm: Term, subterm_location: Vec<SubLoc<'a>>}
+struct ReductionSpec {new_term: Term, reduced_subterm: Term, subterm_location: Vec<SubLoc>}
 
-fn raise_spec_level<'a>(
-  ReductionSpec { new_term, reduced_subterm, mut subterm_location }: ReductionSpec<'a>, 
-  sub_loc: SubLoc<'a>
-) -> ReductionSpec<'a> {
-  subterm_location.push(sub_loc);
+fn raise_spec_level(
+  ReductionSpec { new_term, reduced_subterm, mut subterm_location }: ReductionSpec,
+  sub_loc: SubLoc
+) -> ReductionSpec {
+  subterm_location.push(sub_loc.clone());
   match sub_loc {
     SubLoc::LambdaD => 
     ReductionSpec { new_term: Lambda(Box::new(new_term)), reduced_subterm, subterm_location },
@@ -1010,8 +1010,8 @@ fn raise_spec_level<'a>(
   
 }
 
-fn raise_all_spec_level<'a>(specs: Vec<ReductionSpec<'a>>, sub_loc: SubLoc<'a>) -> Vec<ReductionSpec<'a>> {
-  specs.into_iter().map(|spec|raise_spec_level(spec, sub_loc)).collect()
+fn raise_all_spec_level<'a>(specs: Vec<ReductionSpec>, sub_loc: SubLoc) -> Vec<ReductionSpec> {
+  specs.into_iter().map(|spec|raise_spec_level(spec, sub_loc.clone())).collect()
 }
 
 fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
@@ -1033,8 +1033,8 @@ fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
         };
         all_specs.push(top_level_spec);
       }
-      let x_specs = raise_all_spec_level(all_reductions_of_term(x), SubLoc::AppL(&y));
-      let y_specs = raise_all_spec_level(all_reductions_of_term(y), SubLoc::AppR(&x));
+      let x_specs = raise_all_spec_level(all_reductions_of_term(x), SubLoc::AppL(*y.clone()));
+      let y_specs = raise_all_spec_level(all_reductions_of_term(y), SubLoc::AppR(*x.clone()));
       all_specs.extend(x_specs);
       all_specs.extend(y_specs);
       all_specs
@@ -1042,8 +1042,26 @@ fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
   }
 }
 
-fn arbitrary_reductions_of_depth(term: &Term, depth: u32) -> Vec<ReductionSpec> {
-  todo!()
+// a list, where each term in the list, is the reduced term, plus a list of RS that got you there
+fn arbitrary_reductions_of_depth(term: &Term, depth: u32) -> Vec<(Term, Vec<ReductionSpec>)> {
+  let mut out = vec![(term.clone(), vec![])];
+  for _d in 0..depth {
+    let mut new_out = vec![];
+    // reduce everything by one more
+    for (term, reduction_sequence) in out.iter() {
+      let reds = all_reductions_of_term(&term);
+      for red in reds {
+        let new_term = red.new_term.clone();
+        let mut new_seq = reduction_sequence.clone();
+        new_seq.push(red);
+        new_out.push((new_term, new_seq))
+      }
+    }
+    // now dedup 
+    new_out = new_out.iter().unique_by(|(t, _)| t).cloned().collect();
+    out = new_out;
+  }
+  out 
 }
 
 fn dro_term(term: &Term, max_depth: u32) -> (Term, TermRes) {
@@ -1587,4 +1605,9 @@ mod test {
       let ans_terms = [t_str("λ((1)(λ1)1)(λ1)1"), t_str("λ(((λ1)1)1)(λ1)1"), t_str("λ(((λ1)1)(λ1)1)1")];
       check_terms_present_in_reductions(&three_ids, &ans_terms);
     }
-}
+
+    #[test]
+    fn test_arbitrary_reductions_of_depth() {
+      
+    }
+  }
