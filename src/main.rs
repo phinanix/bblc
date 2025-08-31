@@ -467,7 +467,16 @@ enum TermRes {
     step counts be S and E. then S is a nf-order-reducing subterm of E
      */
     Subset(u32, u32),
+    /* 
+    30 Aug 2025: I have no idea what this is and the code isn't called, yikes
+     */
     AdvSubset(u32, u32),
+    /* 
+    the depth of Dro
+    the resulting term
+    and the proof that the resulting term doesn't halt
+     */
+    DroNonhalt(u32, Term, Box<TermRes>),
 }
 use TermRes::*;
 
@@ -756,7 +765,6 @@ fn nf_reduce_twi(term: &TermWithId, reduce_limit: u32, hm: &HashMap<u64, u32>, c
     Ok((cur_term, counter))
 }
 
-
 /*  
 the goal is to check whether on step n, we try to reduce as a subterm the entire 
 term that we were trying to reduce on step k < n
@@ -941,6 +949,103 @@ fn check_all_subset_terms(terms: Vec<(Term, TermRes)>, check_limit: u32) -> Vec<
 
 }
 
+// implementation of DRO (Different Reduction Order) starts here
+/* 
+  the idea, is that a term may have many available beta reductions. 
+  only the "leftmost outermost", the NF-reduction, is guaranteed to progress 
+  towards a halting state, if such a state exists. however, if a halting state 
+  exists, then any possible beta reduction will take you to a term with the same
+  halting state. 
+
+  therefore, a valid proof of halting could end up much shorter if you take reductions
+  in a different order. (this isn't yet relevant to us, since we currently solve up 
+  to 23 bit terms, and all unsolved terms for 24-27 (1,3,1,4) = 9 total) are 
+  nonhalting. 
+
+  importantly, however, if you can perform some arbitrary sequence of reductions, 
+  then show the resulting term does not halt, the original term must not have 
+  halted. This solves all 9 holdouts up to size 27 AFAICT (I don't currently 
+  know any (!!) counterexample to this method, though I imagine it isn't way bigger
+  than 28. 30 would be a little lucky, 32 would be pretty lucky, higher than that is 
+  hard to believe). 
+
+  architecture: 
+  1. a function which takes a lambda term and returns it reduced by all possible reductions. 
+  for ease of correctness, this function will also return the pair of subterms that were
+  reduced by one step, and a path from the top level to the place a subterm was reduced. 
+  2. a function which takes a lambda term and a depth and uses (1) to compute all sequences
+  of reduction at that depth (avoiding duplicates) 
+  3. a function which takes a lambda term, and a maximum depth, and iterates from depth 1 to
+  the maximum depth, computes all possible terms at that depth, then runs those through the 
+  currently known nonhalting deciders. then assembles any proof into a nice certificate. 
+*/
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+enum SubLoc {
+  LambdaD,//down
+  AppL, //left
+  AppR,
+}
+/*
+ the global term after reduction, 
+ the pre-reduction subterm that was selected, and 
+ the path from the root of the term to the location of the selected subterm
+ */ 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+struct ReductionSpec {new_term: Term, reduced_subterm: Term, subterm_location: Vec<SubLoc>}
+
+fn raise_spec_level(ReductionSpec { new_term, reduced_subterm, mut subterm_location }: ReductionSpec, sub_loc: SubLoc) -> ReductionSpec {
+  subterm_location.push(sub_loc);
+  match sub_loc {
+    SubLoc::LambdaD => ReductionSpec { new_term: Lambda(Box::new(new_term)), reduced_subterm, subterm_location },
+    SubLoc::AppL => todo!(),
+    SubLoc::AppR => todo!(),
+  }
+  
+}
+
+fn raise_all_spec_level(specs: Vec<ReductionSpec>, sub_loc: SubLoc) -> Vec<ReductionSpec> {
+  specs.into_iter().map(|spec|raise_spec_level(spec, sub_loc)).collect()
+}
+
+fn all_reductions_of_term(term: &Term) -> Vec<ReductionSpec> {
+  match term {
+    Index(_) => vec![], 
+    Lambda(x) => {
+      let level_down_specs = all_reductions_of_term(x); 
+      raise_all_spec_level(level_down_specs, SubLoc::LambdaD)
+    }, 
+    App(x, y) => {
+
+      let mut all_specs = vec![];
+      if let Lambda(z) = *x.clone() {
+        let reduced_term = substitute(*z, &y);
+        let top_level_spec = ReductionSpec {
+          new_term: reduced_term,
+          reduced_subterm: term.clone(), 
+          subterm_location: vec![],
+        };
+        all_specs.push(top_level_spec);
+      }
+      let x_specs = raise_all_spec_level(all_reductions_of_term(x), SubLoc::AppL);
+      let y_specs = raise_all_spec_level(all_reductions_of_term(y), SubLoc::AppR);
+      all_specs.extend(x_specs);
+      all_specs.extend(y_specs);
+      all_specs
+    }, 
+  }
+}
+
+fn arbitrary_reductions_of_depth(term: &Term, depth: u32) -> Vec<ReductionSpec> {
+  todo!()
+}
+
+fn dro_term(term: &Term, max_depth: u32) -> (Term, TermRes) {
+  todo!()
+}
+
+// end DRO 
+
 fn print_term(term: &Term) -> String {
     let switch = true;
     if switch {
@@ -1027,6 +1132,7 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
     let mut nf_terms = vec![];
     let mut loop_terms = vec![];
     let mut subset_terms = vec![];
+    let mut dro_terms = vec![];
     let mut unsolved = vec![];
     for output in red_output {
         match output {
@@ -1035,12 +1141,13 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
             (t, Reduced(r, steps, size)) => nf_terms.push((t, r, steps, size)),
             (t, Looped(loop_start, loop_end)) => loop_terms.push((t, loop_start, loop_end)),
             (t, Subset(start, end)) => subset_terms.push((t, start, end)),
-            (t, AdvSubset(start, end)) => subset_terms.push((t, start, end)),
-            // _ => panic!("failed to match")
+            (_t, AdvSubset(_start, _end)) => panic!("I have no idea what this is"),
+            (t, DroNonhalt(depth, dro_term, proof)) => dro_terms.push((t, depth, dro_term, proof)),
+
         }
     }
 
-    let num_solved = nf_terms.len() + loop_terms.len() + subset_terms.len();
+    let num_solved = nf_terms.len() + loop_terms.len() + subset_terms.len() + dro_terms.len();
     let num_unsolved = unsolved.len(); 
     assert_eq!(num_solved + num_unsolved, total_len);
 
@@ -1054,7 +1161,6 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
         for (t, s, e) in &sorted_by_end[0..10.min(sorted_by_end.len())] {
             display_looped_term(t, *s, *e);
         }
-
     }
 
     if subset_terms.len() > 0 {
@@ -1065,7 +1171,10 @@ fn display_output(red_output: Vec<(Term, TermRes)> , step_limit: u32, display_st
         for (t, s, e) in &sorted_by_end[0..10.min(sorted_by_end.len())] {
             display_subset_term(t, *s, *e);
         }
+    }
 
+    if dro_terms.len() > 0 {
+      println!("\n{} terms were solved by DRO", dro_terms.len()); 
     }
 
     if nf_terms.len() > 0 {
@@ -1171,7 +1280,7 @@ fn parse_term(term_string: String) -> Option<Term> {
 
 fn main() {
     let max_size = 28;
-    let step_limit = 100;
+    let step_limit = 50;
     let size_limit = 100_000;
     let display_steps = 10;
     let table = dp_list_terms_of_size_open(max_size, 0);
@@ -1421,5 +1530,55 @@ mod test {
         // dup is λA11 so 0001 1010 which is 2 + 8 + 16 = 26
         // so as a u64 it'll be 26 + 256 = 282
         assert_eq!(mb_u64, Some(282)); 
+    }
+
+
+    fn check_terms_present_in_reductions(term: &Term, ans_terms: &[Term]) {
+      assert!(ans_terms.iter().all_unique());
+      let reductions = all_reductions_of_term(term);
+      let found_terms: HashSet<Term> = reductions.into_iter().map(|rs|rs.new_term.clone()).unique().collect();
+      assert_eq!(found_terms.len(), ans_terms.len()); 
+      for ans in ans_terms {
+        assert!(found_terms.contains(&ans));
+      }
+    }
+
+    #[test] 
+    fn test_all_reductions_of_term() {
+      let terms_with_no_reductions = [id(), zero(), one()]; 
+      for term in terms_with_no_reductions {
+        let all_red = all_reductions_of_term(&term);
+        assert_eq!(all_red.len(), 0, "{:?}", &all_red);
+      }
+      /* examples I want to exist: 
+      the guy of size 24
+      dup (dup dup)
+      \x. (id x) (id x) (id x) 
+      */
+
+      // dup (\x. x (id x))
+      // input is dup Y
+      // output should be Y Y or dup dup 
+      let dro_holdout = t_str("(λ(1)1)λ(1)(λ1)1");
+      let ans_terms = [t_str("(λ(1)1)λ(1)1"), t_str("(λ(1)(λ1)1)λ(1)(λ1)1")];
+      check_terms_present_in_reductions(&dro_holdout, &ans_terms);
+
+      // dup (dup dup)
+      // output is dup (dup dup) or (dup dup) (dup dup)
+      let dup_of_dupdup = t_str("(λ(1)1)(λ(1)1)λ(1)1");
+      let ans_terms = [dup_of_dupdup.clone(), t_str("((λ(1)1)λ(1)1)(λ(1)1)λ(1)1")];
+      check_terms_present_in_reductions(&dup_of_dupdup, &ans_terms);
+      // (dup dup) dup 
+      // output is (dup dup) dup
+      let dupdup_of_dup = t_str("((λ(1)1)λ(1)1)λ(1)1");
+      let ans_terms = [dupdup_of_dup.clone()];
+      check_terms_present_in_reductions(&dupdup_of_dup, &ans_terms);
+
+      // \x. (id x) (id x) (id x) 
+      // output is \x. x (id x) (id x) and so on (3) 
+      // id x is (λ1)1
+      let three_ids = t_str("λ(((λ1)1)(λ1)1)(λ1)1");
+      let ans_terms = [t_str("λ((1)(λ1)1)(λ1)1"), t_str("λ(((λ1)1)1)(λ1)1"), t_str("λ(((λ1)1)(λ1)1)1")];
+      check_terms_present_in_reductions(&three_ids, &ans_terms);
     }
 }
