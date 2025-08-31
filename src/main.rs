@@ -568,10 +568,12 @@ fn check_loop(term: Term, ud: UnsolvedData, loop_base: u32, loop_limit: u32) -> 
 
 fn check_loop_wrap((term, prev_res): (Term, TermRes), loop_base: u32, loop_limit: u32) -> (Term, TermRes) {
   match prev_res {
+
     Reduced(_, _, _) => (term, prev_res),
     Unsolved(ud) => check_loop(term, ud, loop_base, loop_limit),
     // todo: fix these dumb match arms
-    _ => panic!("unexpected 1"),
+    _ => (term, prev_res),
+    // _ => panic!("unexpected 1"),
   }
 }
 
@@ -1366,7 +1368,7 @@ fn parse_term(term_string: String) -> Option<Term> {
 }
 
 fn main() {
-    let max_size = 28;
+    let max_size = 30;
     let step_limit = 50;
     let size_limit = 100_000;
     let display_steps = 10;
@@ -1385,7 +1387,8 @@ fn main() {
         let subset_terms = check_all_subset_terms(loop_terms, 20);
         println!("terms subset");
         let dro_terms = dro_all_terms(subset_terms, 4);
-        let output = dro_terms;
+        let loop2_terms = check_loops(dro_terms, 10, 400);
+        let output = loop2_terms;
         display_output(output, step_limit, display_steps);
     }
 
@@ -1393,16 +1396,22 @@ fn main() {
     // println!("{}", print_term_reduction(&term, 10));
     // nf_reduce_all_subsets(term, UnsolvedData { reduce_nf: None }, 10);
 
-    let term = parse_term("(λ(1)1)λ(1)(λ1)1".to_owned()).unwrap();
-    println!("{}", print_term_reduction(&term, 10));
 
     // the next thing to do is DRO - "different reduction order" 
     // you first reduce for some number 1 . . . k steps trying all possible reductions
     // then you apply previous deciders & if they prove the new term does or does not halt, then the 
     // original term has the same property 
 
-    // also this is a bug: 
-    //size 24  There were 8574 terms, of which 8569 were solved and 1 were unsolved
+    // this is the first size 25 holdout. 
+    // it's dup (λx. x (λy. x y)). 
+    // notice that (λy. x y) is semantically equivalent to x, it's just eta expanded
+
+    let term = parse_term("(λ(1)1)λ(1)λ(2)1".to_owned()).unwrap();
+    println!("{}", print_term_reduction(&term, 10));
+    
+    let term = parse_term("(λ(1)1)λ(1)(1)λ2".to_owned()).unwrap();
+    println!("{}", print_term_reduction(&term, 30));
+
 
 }
 
